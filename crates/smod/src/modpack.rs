@@ -187,6 +187,7 @@ impl Modpack {
         let mut entry = zip
             .by_name(&format!("{OVERRIDES}{name}"))
             .map_err(|e| format!("{name}: {e}"))?;
+        check_destination(home, name)?;
         let target = home.join(name);
         if let Some(dir) = target.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -206,6 +207,33 @@ impl Modpack {
         }
         Ok(target)
     }
+}
+
+/// Refuses an override whose destination, or a folder on the way to it under
+/// `home`, is already a link (a symlink, or a junction on Windows): writing
+/// through it would leave the game folder. `home` itself may be anything.
+fn check_destination(home: &Path, name: &str) -> Result<(), String> {
+    let parts: Vec<&str> = name.split('/').collect();
+    let mut at = home.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        at.push(part);
+        let meta = match std::fs::symlink_metadata(&at) {
+            Ok(meta) => meta,
+            // Nothing here, so nothing below it exists either.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(format!("{}: {e}", at.display())),
+        };
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "{}: is a link; an override is not written through links",
+                at.display()
+            ));
+        }
+        if i + 1 < parts.len() && !meta.is_dir() {
+            return Err(format!("{}: is not a folder", at.display()));
+        }
+    }
+    Ok(())
 }
 
 /// An override's path under `overrides/`: a settings file, a resource pack
@@ -324,5 +352,58 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
         let short = PACK.replace("0000000000000000", "00");
         assert!(Manifest::parse(&short).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Links `home/resourcepacks` to a folder outside `home` with `link(outside, at)`, then checks
+    /// that an override for `resourcepacks/pack.zip` is refused and the folder outside is left alone.
+    fn refuses_a_link(name: &str, link: impl FnOnce(&Path, &Path) -> std::io::Result<()>) {
+        let dir = scratch(name);
+        let outside = dir.join("outside");
+        let home = dir.join("home");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(outside.join("pack.zip"), b"not the pack's").unwrap();
+        if let Err(e) = link(&outside, &home.join("resourcepacks")) {
+            eprintln!("skipped: cannot create a symlink here ({e})");
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        }
+        let path = write_pack(
+            &dir,
+            PACK,
+            &[("overrides/resourcepacks/pack.zip", b"from the pack")],
+        );
+        assert!(Modpack::extract_overrides(&path, &home).is_err());
+        assert_eq!(
+            std::fs::read(outside.join("pack.zip")).unwrap(),
+            b"not the pack's"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_override_is_not_written_through_a_linked_folder() {
+        refuses_a_link("link", |to, at| {
+            #[cfg(unix)]
+            return std::os::unix::fs::symlink(to, at);
+            #[cfg(windows)]
+            return std::os::windows::fs::symlink_dir(to, at);
+        });
+    }
+
+    /// A junction needs no privilege on Windows, so unlike the symlink above this test never skips.
+    #[cfg(windows)]
+    #[test]
+    fn an_override_is_not_written_through_a_junction() {
+        refuses_a_link("junction", |to, at| {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(at)
+                .arg(to)
+                .output()
+                .unwrap();
+            assert!(made.status.success(), "mklink /J failed: {made:?}");
+            Ok(())
+        });
     }
 }
