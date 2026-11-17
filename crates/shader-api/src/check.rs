@@ -228,11 +228,20 @@ pub fn check(pack: &Pack) -> Result<Report, Vec<Problem>> {
     }
 }
 
-/// Builds and checks one stage of `pack` from its file.
+/// Builds and checks one stage of `pack` from its file, on a thread of its own with the stack
+/// and the bounds of [`crate::guard`]: a pack's file never crashes the checker.
 pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedStage, Vec<Problem>> {
+    crate::guard::guarded(|| build_stage(pack, kind, file))
+        .unwrap_or_else(|reason| Err(vec![problem(file, reason)]))
+}
+
+fn build_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedStage, Vec<Problem>> {
     // First without the entry points, so a missing or mistyped stage function
     // is reported as such rather than as a call that doesn't resolve.
     let mut own = compose(pack, kind, file);
+    if let Some((at, message)) = crate::guard::refusal(&own.text) {
+        return Err(vec![located(&own, at, message)]);
+    }
     let entries = own.parts.pop().expect("entries are the last part");
     own.text.truncate(entries.1.start);
     // The material prelude's LabPBR functions call into the renderer: a stand-in here.
@@ -766,4 +775,60 @@ fn translate(
         }
     }
     problems
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MANIFEST;
+
+    const POST: &str = "fn post(input: PostInput) -> vec4<f32> { return input.color; }\n";
+    const TONEMAP: &str =
+        "fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color / frame.headroom; }\n";
+
+    /// A 0.2 pack of a post pass and a tonemap stage, checked.
+    fn pack_0_2(post: &str) -> Result<Report, Vec<Problem>> {
+        let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+                        [[post]]\nfile = \"post.wgsl\"\n[tonemap]\nfile = \"tonemap.wgsl\"\n";
+        let files = [
+            (MANIFEST, manifest),
+            ("post.wgsl", post),
+            ("tonemap.wgsl", TONEMAP),
+        ]
+        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+        .into();
+        check(&Pack::from_files(files).unwrap())
+    }
+
+    /// The same two checks as the game's: a stage file with an expression chain of ten thousand
+    /// terms is refused, naming the file and the line, instead of overflowing the parser's stack
+    /// (which aborts the process); so is one longer than a shader may be.
+    #[test]
+    fn a_pack_file_that_would_overflow_the_parser_is_refused() {
+        assert!(pack_0_2(POST).is_ok());
+        let chain = format!(
+            "fn post(input: PostInput) -> vec4<f32> {{\n    let a = input.color.r;\n    let x = a{};\n    return vec4<f32>(x);\n}}\n",
+            "+a".repeat(10_000)
+        );
+        let refused = pack_0_2(&chain).unwrap_err();
+        assert_eq!(refused.len(), 1, "{refused:#?}");
+        assert_eq!(
+            (refused[0].file.as_str(), refused[0].line),
+            ("post.wgsl", 3)
+        );
+        assert!(
+            refused[0]
+                .message
+                .starts_with("an expression chains more than 200 operators ("),
+            "{}",
+            refused[0].message
+        );
+        let long = format!("{POST}// {}\n", "x".repeat(200_000));
+        let refused = pack_0_2(&long).unwrap_err();
+        assert!(
+            refused[0].message.ends_with("a shader may hold 131072"),
+            "{}",
+            refused[0].message
+        );
+    }
 }

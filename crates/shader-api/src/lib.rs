@@ -4,6 +4,7 @@
 //! launcher and the registry all use it, so a pack is judged the same way
 //! everywhere.
 pub mod check;
+pub mod guard;
 pub mod inputs;
 pub mod manifest;
 pub mod package;
