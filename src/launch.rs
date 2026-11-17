@@ -411,6 +411,19 @@ fn windows_quote(word: &OsStr) -> String {
     out
 }
 
+/// `word` with a caret before each character cmd.exe acts on, so cmd runs no part of it and
+/// removes the carets before the program reads it.
+fn cmd_escape(word: &str) -> String {
+    let mut out = String::with_capacity(word.len());
+    for c in word.chars() {
+        if "()%!^\"<>&|".contains(c) {
+            out.push('^');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// How [`wrap`] runs a command on each system, apart from the variables and the folder: the
 /// program and its arguments.
 #[derive(Debug, PartialEq, Eq)]
@@ -443,7 +456,13 @@ pub fn plan(launch: &Launch, words: Vec<OsString>, windows: bool, found: &Found)
             line: format!(
                 "{pre} && {}",
                 all.iter()
-                    .map(|w| windows_quote(w))
+                    .enumerate()
+                    .map(|(i, w)| match windows_quote(w) {
+                        // The program keeps its plain quotes: cmd finds it by them, and escaped they
+                        // would split a path with a space.
+                        w if i == 0 && w.starts_with('"') => w,
+                        w => cmd_escape(&w),
+                    })
                     .collect::<Vec<_>>()
                     .join(" ")
             ),

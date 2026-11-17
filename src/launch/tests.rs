@@ -99,7 +99,8 @@ fn each_system_gets_its_plan() {
             &Found::default()
         ),
         Plan::Cmd {
-            line: r#"echo hi && nice -n 5 C:\Sunrise\sunrise-client.exe --world "My World""#.into()
+            line: r#"echo hi && nice -n 5 C:\Sunrise\sunrise-client.exe --world ^"My World^""#
+                .into()
         }
     );
 }
@@ -112,6 +113,70 @@ fn windows_words_are_quoted_as_the_c_runtime_reads_them() {
     assert_eq!(q(""), "\"\"");
     assert_eq!(q(r#"say "hi""#), r#""say \"hi\"""#);
     assert_eq!(q(r"C:\My Folder\"), r#""C:\My Folder\\""#);
+}
+
+/// The characters cmd.exe acts on as operators in `line`: outside quotes and not after a caret.
+fn cmd_operators(line: &str) -> String {
+    let (mut out, mut quoted, mut chars) = (String::new(), false, line.chars());
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => quoted = !quoted,
+            '^' if !quoted => {
+                chars.next();
+            }
+            '&' | '|' | '<' | '>' | '(' | ')' if !quoted => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+#[test]
+fn windows_game_words_are_escaped_for_cmd_after_a_pre_launch_command() {
+    let pre = "echo %USERNAME% & echo hi";
+    let launch = Launch {
+        pre_launch: pre.into(),
+        ..Launch::default()
+    };
+    let line = |words: &[&str]| {
+        let Plan::Cmd { line } = plan(&launch, os(words), true, &Found::default()) else {
+            panic!()
+        };
+        // The player's own text stays as typed.
+        let Some(game) = line.strip_prefix(&format!("{pre} && ")) else {
+            panic!("{line}")
+        };
+        game.to_owned()
+    };
+    assert_eq!(
+        line(&["game.exe", "--server", "a&calc"]),
+        "game.exe --server a^&calc"
+    );
+    assert_eq!(cmd_operators(&line(&["game.exe", r#"x" & calc & ""#])), "");
+    assert_eq!(line(&["game.exe", "%PATH%"]), "game.exe ^%PATH^%");
+    // cmd removes the carets, so the game reads `"My World"`: one argument.
+    assert_eq!(
+        line(&["game.exe", "--world", "My World"]),
+        r#"game.exe --world ^"My World^""#
+    );
+    // cmd finds the program by its own quotes; escaped, they would split the path at the space.
+    assert_eq!(
+        line(&[r"C:\Program Files (x86)\game.exe"]),
+        r#""C:\Program Files (x86)\game.exe""#
+    );
+    // Without cmd the words are passed on as they are.
+    let words = os(&["game.exe", "--server", "a&calc"]);
+    assert_eq!(
+        plan(&Launch::default(), words.clone(), true, &Found::default()),
+        Plan::Direct(words.clone())
+    );
+    assert_eq!(
+        plan(&launch, words.clone(), false, &Found::default()),
+        Plan::Shell {
+            script: script(pre),
+            words
+        }
+    );
 }
 
 #[test]
