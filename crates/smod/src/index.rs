@@ -837,9 +837,9 @@ impl Facts {
 }
 
 /// Reads and checks a file as its kind: a mod's manifest (its content is the game's content
-/// fence's, which the caller runs), a modpack's manifest and overrides, a resource pack's
-/// `pack.mcmeta` and paths, a shader pack's `sunrise_launcher_shader_api::check` (the game's own). Kinds
-/// this build doesn't know are refused: their checks come with their formats.
+/// fence's, which the game runs when it loads the mod), a modpack's manifest and overrides, a
+/// resource pack's `pack.mcmeta` and paths, a shader pack's `sunrise_launcher_shader_api::check` (the
+/// game's own). Kinds this build doesn't know are refused: their checks come with their formats.
 pub fn inspect(kind: &Kind, path: &Path) -> Result<Facts, String> {
     match kind {
         Kind::NativeMod => Ok(native::Bundle::read(path)?.facts()),

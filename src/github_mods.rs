@@ -3,11 +3,12 @@
 //! latest release), a release tag, a branch or tag (`tree/`) or a commit. It is resolved through
 //! GitHub's public API to an exact **release asset** (a `.smod`, kept by its SHA-256) or an exact
 //! **commit** (the archive of that commit, whose mod folder is packed into a `.smod`), never to a
-//! branch that moves. The result passes the checks the registry's `.smod`s pass
-//! (`sunrise_launcher_smod::index::native::Bundle::read`) before anything is installed, and the origin is
+//! branch that moves. The result passes `sunrise_launcher_smod::index::native::Bundle::read`, the launcher's
+//! own read of a native mod, before anything is installed, and the origin is
 //! kept beside the file (`sunrise-native-mods/<id>.origin.json`) for "check for updates".
 //!
-//! Nothing here runs the mod's code, and nothing here trusts it: the registry has not reviewed it.
+//! Nothing here runs the mod's code, and nothing here trusts it: the registry has not reviewed it. The game's
+//! content fence is not run here either: the game runs it when it loads the mod.
 //! Callers show [`WARNING`] and ask first (`--trust-native-code`).
 use crate::backend;
 use crate::browser::mod_list;
