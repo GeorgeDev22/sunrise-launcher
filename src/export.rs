@@ -79,9 +79,10 @@ fn write(path: &Path, files: &[(String, PathBuf)]) -> Result<(), String> {
     let mut zip = zip::ZipWriter::new(fs::File::create(path).map_err(|e| e.to_string())?);
     let options = zip::write::SimpleFileOptions::default();
     for (rel, file) in files {
-        let bytes = match rel.ends_with("/level.dat") {
-            true => shareable_level(file)?,
-            false => fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?,
+        let bytes = match rel.as_str() {
+            rel if rel.ends_with("/level.dat") => shareable_level(file)?,
+            "options.txt" => shareable_options(file)?,
+            _ => fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?,
         };
         zip.start_file(rel, options).map_err(|e| e.to_string())?;
         zip.write_all(&bytes).map_err(|e| e.to_string())?;
@@ -113,6 +114,21 @@ fn walk(home: &Path, dir: &Path, skip: &[&str], out: &mut Vec<(String, PathBuf)>
 }
 
 /// A world's level.dat without the player's UUID; unreadable, it goes as it is.
+/// `options.txt` without its `lastServer:` line: the address the player last connected to is theirs,
+/// not part of the instance they share. Anything that is not text is passed on as it is.
+fn shareable_options(file: &Path) -> Result<Vec<u8>, String> {
+    let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(not_text) => return Ok(not_text.into_bytes()),
+    };
+    Ok(text
+        .split_inclusive('\n')
+        .filter(|line| !line.starts_with("lastServer:"))
+        .collect::<String>()
+        .into_bytes())
+}
+
 fn shareable_level(file: &Path) -> Result<Vec<u8>, String> {
     let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let mut raw = Vec::new();

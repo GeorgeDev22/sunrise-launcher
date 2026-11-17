@@ -101,6 +101,34 @@ fn read(zip: &Path, name: &str) -> Vec<u8> {
 }
 
 #[test]
+fn an_exported_options_file_does_not_carry_the_last_server() {
+    let home = home("last-server");
+    put(
+        &home.join("options.txt"),
+        b"lang:fr_ch\nlastServer:203.0.113.7:25565\nfov:70\r\nlastServer:\n",
+    );
+    for format in [Format::Zip, Format::Mrpack] {
+        let out = home.join(format!(
+            "out/Share.{}",
+            if format == Format::Zip {
+                "zip"
+            } else {
+                "mrpack"
+            }
+        ));
+        export(&home, "Share", format, &[], &[], &out).unwrap();
+        let entry = if format == Format::Zip {
+            "options.txt"
+        } else {
+            "overrides/options.txt"
+        };
+        let options = String::from_utf8(read(&out, entry)).unwrap();
+        assert_eq!(options, "lang:fr_ch\nfov:70\r\n", "{format:?}");
+    }
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
 fn a_zip_has_the_instance_and_the_picked_world_and_nothing_private() {
     let home = home("zip");
     let out = home.join("out/Hardcore.zip");
