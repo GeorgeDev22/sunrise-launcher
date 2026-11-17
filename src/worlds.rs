@@ -10,6 +10,9 @@ use sunrise_launcher_nbt::{self as nbt, Limits, Tag};
 
 /// The lock a running game holds on a world; vanilla's backups leave it out.
 const LOCK: &str = "session.lock";
+/// The latest `LastPlayed` kept: the end of year 9999, in milliseconds. A later time does not fit a
+/// Windows `SystemTime`, and adding it panics.
+const MAX_LAST_PLAYED_MILLIS: u64 = 253_402_300_799_000;
 
 struct WorldLock(fs::File);
 
@@ -155,7 +158,9 @@ fn scanned_world(path: &Path) -> std::io::Result<Option<Scanned>> {
         _ => "Survival",
     };
     let last_played = match number(field("LastPlayed")) {
-        millis if millis > 0 => UNIX_EPOCH + Duration::from_millis(millis as u64),
+        millis if millis > 0 => {
+            UNIX_EPOCH + Duration::from_millis((millis as u64).min(MAX_LAST_PLAYED_MILLIS))
+        }
         _ => changed,
     };
     let icon = path.join("icon.png");
