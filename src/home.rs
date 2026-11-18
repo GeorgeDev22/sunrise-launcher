@@ -34,8 +34,6 @@ const WORLD_TILE: f32 = 128.;
 const PACKS_AT_REST: f32 = 0.6;
 /// The room between the header and the panel under it.
 const GAP: f32 = 20.;
-/// How far the header stands in from the panel's edge.
-const INSET: f32 = 32.;
 
 #[derive(Default)]
 pub(crate) struct HomeState {
@@ -76,6 +74,9 @@ pub(crate) fn near(
 /// tall as all of them) while only those near the view are built.
 #[derive(Clone, Default)]
 pub(crate) struct Near(Rc<Cell<Option<Bounds<gpui::Pixels>>>>);
+
+/// How far the header stands in from the edge of its plate, over a picture.
+const INSET: f32 = 32.;
 
 impl Near {
     /// How wide the list was last drawn.
@@ -155,7 +156,7 @@ impl HomeState {
         match self.picker.get() {
             Some(picker) => (f32::from(picker.left()), f32::from(picker.bottom()) + 6.),
             // Home was not drawn yet; it is by the next frame.
-            None => (INSET, 96.),
+            None => (0., 96.),
         }
     }
 }
@@ -236,8 +237,8 @@ impl Launcher {
             .flex_col()
             .gap(px(GAP))
             .pt(px(24.))
-            // Home paints no page of its own: the header stands on the scenery, inset like the
-            // text of the panel under it. A picture may be any colour, so over one the header
+            // Home paints no page of its own: the header stands on the scenery, its buttons'
+            // edges in line with the panel's under it. A picture may be any colour, so over one the header
             // stands on a plate of its own, as wide as what it holds; the picture shows beside
             // it.
             .child(if self.theme.photo {
@@ -250,7 +251,7 @@ impl Launcher {
                         .child(header),
                 )
             } else {
-                header.flex_none().px(px(INSET))
+                header.flex_none()
             })
             // The panel is the sidebar's material and fills Home's box to its left, right and
             // bottom edges, so the frame lines it up with the sidebar. It reaches the foot when
