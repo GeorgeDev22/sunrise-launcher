@@ -114,15 +114,26 @@ fn walk(home: &Path, dir: &Path, skip: &[&str], out: &mut Vec<(String, PathBuf)>
 }
 
 /// `options.txt` without its `lastServer:` line: the address the player last connected to is theirs,
-/// not part of the instance they share. Filtered as bytes, so a file that is not UTF-8 loses it too.
+/// not part of the instance they share. Filtered as bytes, so a file that is not UTF-8 loses it too;
+/// every other line keeps its bytes and its ending.
 fn shareable_options(file: &Path) -> Result<Vec<u8>, String> {
     let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    Ok(bytes
-        .split_inclusive(|b| *b == b'\n')
-        .filter(|line| !line.starts_with(b"lastServer:"))
-        .flatten()
-        .copied()
-        .collect())
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut rest = &bytes[..];
+    while !rest.is_empty() {
+        // The game ends a line at LF, CRLF or a bare CR, as `BufferedReader.lines()` does.
+        let end = match rest.iter().position(|b| matches!(b, b'\r' | b'\n')) {
+            Some(i) if rest[i] == b'\r' && rest.get(i + 1) == Some(&b'\n') => i + 2,
+            Some(i) => i + 1,
+            None => rest.len(),
+        };
+        let (line, tail) = rest.split_at(end);
+        if !line.starts_with(b"lastServer:") {
+            out.extend_from_slice(line);
+        }
+        rest = tail;
+    }
+    Ok(out)
 }
 
 /// A world's level.dat without the player's UUID; unreadable, it goes as it is.
