@@ -102,7 +102,12 @@ pub fn carry_over(data: &Path, config: &Path) -> Result<bool, String> {
     crate::relocation::prepare_paths(&staged, &source, &target)?;
     // From here the stage holds the whole copy: a start that finds it with one target in place
     // finishes the renames (`resume`) instead of leaving the other folder in it.
-    fs::write(stage.join(COMPLETE), b"").map_err(|e| format!("{}: {e}", stage.display()))?;
+    // The marker is what a later start trusts: it must be on disk before a rename is.
+    let marker = stage.join(COMPLETE);
+    fs::File::create(&marker)
+        .and_then(|file| file.sync_all())
+        .map_err(|e| format!("{}: {e}", marker.display()))?;
+    data_location::sync_dir(&stage)?;
     fs::rename(&staged.launcher, &launcher).map_err(|e| format!("{}: {e}", launcher.display()))?;
     fs::rename(&staged.game, &game).map_err(|e| format!("{}: {e}", game.display()))?;
     discard(&stage);

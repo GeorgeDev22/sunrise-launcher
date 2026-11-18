@@ -708,7 +708,7 @@ fn commit(bootstrap: &Path, roots: &Roots) -> Result<()> {
     Ok(())
 }
 
-fn sync_dir(path: &Path) -> Result<()> {
+pub(crate) fn sync_dir(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         File::open(path)
