@@ -69,6 +69,7 @@ fn run_launcher() {
     #[cfg(windows)]
     backend::remove_replaced_binaries();
     backend::cleanup_launcher_updates();
+    backend::ensure_notices();
     // What the launcher downloads goes through the player's proxy, if they set one: the parts
     // that build their own agents (`sunrise-port-pack`) are told before anything starts.
     sunrise_launcher::proxy::announce(sunrise_launcher::backend::Settings::load().proxy);

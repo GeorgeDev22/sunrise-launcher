@@ -3844,10 +3844,34 @@ pub fn place_staged(staged: &Staged) -> Result<(), String> {
             )
         })?,
     }
+    // The tarball, the ZIP and a Setup install get binary only: the notices go beside it.
+    if let Some(dir) = notices_dir() {
+        let _ = crate::notices::write_into(dir);
+    }
     // An installed launcher's Uninstall entry names the new version (installer.rs).
     #[cfg(windows)]
     crate::installer::after_update(launcher_version(&staged.tag).unwrap_or(VERSION));
     Ok(())
+}
+
+/// Where this launcher's licence notices belong, when it is a bare binary ([`crate::notices::beside`]).
+fn notices_dir() -> Option<&'static Path> {
+    crate::notices::beside(
+        exe_path(),
+        appimage_path().is_some(),
+        app_bundle(exe_path()).is_some(),
+    )
+}
+
+/// First start of a release: a binary that arrived without its notices (an older launcher's
+/// update, a ZIP unpacked without the folder) gets the ones that are missing.
+pub fn ensure_notices() {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    if let Some(dir) = notices_dir() {
+        let _ = crate::notices::write_missing(dir);
+    }
 }
 
 /// The website's install page, where a launcher that can't update itself sends the player.

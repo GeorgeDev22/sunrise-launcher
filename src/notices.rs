@@ -36,7 +36,6 @@ pub const FILES: &[(&str, &str)] = &[
 ];
 
 /// Writes every notice into `dir/LICENSES`.
-#[cfg(any(windows, test))]
 pub fn write_into(dir: &std::path::Path) -> std::io::Result<()> {
     let folder = dir.join("LICENSES");
     std::fs::create_dir_all(&folder)?;
@@ -44,6 +43,29 @@ pub fn write_into(dir: &std::path::Path) -> std::io::Result<()> {
         std::fs::write(folder.join(name), text)?;
     }
     Ok(())
+}
+
+/// Writes the notices that are missing from `dir/LICENSES`, and none that are there.
+pub fn write_missing(dir: &std::path::Path) -> std::io::Result<()> {
+    let folder = dir.join("LICENSES");
+    for (name, text) in FILES {
+        if !folder.join(name).is_file() {
+            std::fs::create_dir_all(&folder)?;
+            std::fs::write(folder.join(name), text)?;
+        }
+    }
+    Ok(())
+}
+
+/// The folder a binary-only self-update (Linux tarball, portable ZIP, a Windows install) leaves
+/// the notices in: the binary's own. None for what carries its notices inside itself or is
+/// not the launcher's to write in: an AppImage, a `.app` bundle, a system folder.
+pub fn beside(exe: &std::path::Path, appimage: bool, bundle: bool) -> Option<&std::path::Path> {
+    let dir = exe.parent()?;
+    let system = ["/usr/bin", "/usr/local/bin", "/bin"]
+        .iter()
+        .any(|s| dir == std::path::Path::new(s));
+    (!appimage && !bundle && !system).then_some(dir)
 }
 
 /// Removes the notices [`write_into`] wrote, and their folder when nothing else is in it.
@@ -66,6 +88,43 @@ pub fn remove_from(dir: &std::path::Path) -> Vec<String> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn a_binary_only_update_puts_the_notices_beside_the_binary_and_only_there() {
+        let exe = Path::new("/home/p/sunrise/sunrise-launcher");
+        assert_eq!(
+            beside(exe, false, false),
+            Some(Path::new("/home/p/sunrise"))
+        );
+        assert_eq!(
+            beside(exe, true, false),
+            None,
+            "an AppImage holds them itself"
+        );
+        assert_eq!(beside(exe, false, true), None, "a bundle holds them itself");
+        assert_eq!(
+            beside(Path::new("/usr/bin/sunrise-launcher"), false, false),
+            None
+        );
+        let dir = std::env::temp_dir().join(format!("notices-beside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        write_missing(&dir).unwrap();
+        for (name, text) in FILES {
+            assert_eq!(
+                &std::fs::read_to_string(dir.join("LICENSES").join(name)).unwrap(),
+                text
+            );
+        }
+        // A file the player or a newer package changed is left alone at first start.
+        let first = dir.join("LICENSES").join(FILES[0].0);
+        std::fs::write(&first, "mine").unwrap();
+        std::fs::remove_file(dir.join("LICENSES").join(FILES[1].0)).unwrap();
+        write_missing(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "mine");
+        assert!(dir.join("LICENSES").join(FILES[1].0).is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn root() -> &'static Path {
         Path::new(env!("CARGO_MANIFEST_DIR"))
