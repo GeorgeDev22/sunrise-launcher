@@ -57,7 +57,7 @@ pub fn carry_over(data: &Path, config: &Path) -> Result<bool, String> {
     if launcher.exists() || game.exists() {
         // A copy that was finished but stopped between its two renames: the one folder that is
         // still in the stage goes where the game reads it.
-        if stage.join(COMPLETE).is_file() {
+        if stage.join(COMPLETE).is_file() || first_rename_done(&stage, &launcher, &game) {
             return resume(&stage, &launcher, &game);
         }
         // A copy that reached both targets but could not remove its stage (a file appearing in
@@ -107,6 +107,18 @@ pub fn carry_over(data: &Path, config: &Path) -> Result<bool, String> {
     fs::rename(&staged.game, &game).map_err(|e| format!("{}: {e}", game.display()))?;
     discard(&stage);
     Ok(true)
+}
+
+/// Whether an unmarked stage (one a launcher before the marker, 1.0.0 or 1.0.1, left) is provably
+/// a finished copy. Those launchers copied everything, and made `launcher/` in the stage first,
+/// before renaming it into place and then `game/`: so a stage without `launcher/` but with
+/// `game/`, beside a launcher folder and no game folder, stopped between the two renames.
+/// Any other unmarked stage may be half a copy.
+fn first_rename_done(stage: &Path, launcher: &Path, game: &Path) -> bool {
+    launcher.is_dir()
+        && !game.exists()
+        && !stage.join("launcher").exists()
+        && stage.join("game").is_dir()
 }
 
 /// Finishes a copy that stopped between its two renames: each folder still in the stage whose
@@ -323,6 +335,36 @@ mod tests {
     }
 
     #[test]
+    fn the_layout_launcher_1_0_1_left_between_its_renames_is_finished() {
+        let (data, config, base) = scratch("v101");
+        let (stage, launcher, game) = finished_stage(&data);
+        // 1.0.1 wrote no marker: it renamed `launcher` out of the stage and stopped.
+        fs::remove_file(stage.join(COMPLETE)).unwrap();
+        fs::rename(stage.join("launcher"), &launcher).unwrap();
+        fs::write(launcher.join("settings.json"), "{}").unwrap();
+        assert_eq!(carry_over(&data, &config), Ok(true));
+        assert_eq!(
+            fs::read(game.join("saves/World/level.dat")).unwrap(),
+            [1, 2, 3]
+        );
+        assert!(launcher.join("settings.json").is_file());
+        assert!(!stage.exists());
+
+        // The same shape with a game folder already in place: it is not replaced.
+        let (data, config, base2) = scratch("v101-keep");
+        let (stage, launcher, game) = finished_stage(&data);
+        fs::remove_file(stage.join(COMPLETE)).unwrap();
+        fs::rename(stage.join("launcher"), &launcher).unwrap();
+        fs::create_dir_all(game.join("saves")).unwrap();
+        fs::write(game.join("saves/mine.dat"), [9]).unwrap();
+        assert_eq!(carry_over(&data, &config), Ok(false));
+        assert_eq!(fs::read(game.join("saves/mine.dat")).unwrap(), [9]);
+        assert!(!stage.exists(), "both targets exist: the leftover goes");
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&base2);
+    }
+
+    #[test]
     fn a_stage_that_is_not_marked_complete_is_never_moved_into_place() {
         let (data, config, base) = scratch("partial");
         let (stage, launcher, game) = finished_stage(&data);
@@ -345,6 +387,8 @@ mod tests {
         let stage = launcher.with_file_name(".carry-over");
         fs::create_dir_all(stage.join("game/saves")).unwrap();
         fs::write(stage.join("game/saves/level.dat"), [1]).unwrap();
+        // The stage still has its own `launcher/`: the copy cannot be shown to have finished.
+        fs::create_dir_all(stage.join("launcher")).unwrap();
         fs::create_dir_all(&launcher).unwrap();
         fs::write(launcher.join("accounts.json"), "{}").unwrap();
 
