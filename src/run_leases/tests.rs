@@ -280,7 +280,7 @@ fn routing_actor() {
         game.args(["--exact", "run_leases::tests::routing_actor"])
             .env("ROUTING_MODE", "game")
             .current_dir(root.join("instances/player"));
-        let mut game = crate::launch::wrap(game, &crate::launch::Launch::default());
+        let mut game = crate::launch::wrap(game, &crate::launch::Launch::default()).unwrap();
         // A wrapper may consume engine arguments before starting libtest's receiver.
         // Preserve the declared engine command, whose cwd differs from this launcher.
         let words: Vec<std::ffi::OsString> = [

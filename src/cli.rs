@@ -1400,7 +1400,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
                 sunrise_launcher::jars::Permission::headless(allow_jar_downloads),
             )
             .map_err(|error| error.to_string())?;
-            let played = attached(sunrise_launcher::launch::wrap(cmd, &instance.launch));
+            let played = attached(sunrise_launcher::launch::wrap(cmd, &instance.launch)?);
             if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                 eprintln!("Play time not saved: {e}");
             }

@@ -4,13 +4,15 @@
 //! The game and the commands also get the instance's own variables ([`instance_vars`]).
 //!
 //! [`wrap`] turns the game's command into one process that does all three, so the launcher still
-//! follows one program (its output, its exit, Stop):
+//! follows one program (its output, its exit, Stop); on Windows the pre-launch command runs first:
 //!
 //! - Unix: `/bin/sh -c '(<pre-launch>) || exit; exec "$@"' sunrise <wrapper…> <game> <args…>`.
 //!   The pre-launch command is the player's own shell line, run in the instance's folder; the
 //!   game's words go through `"$@"`, so they are never parsed by the shell. `exec` makes the
 //!   shell become the wrapper (or the game).
-//! - Windows: `cmd /D /V:OFF /S /C "<pre-launch> && <wrapper…> <game> <args…>"`, each word quoted.
+//! - Windows: [`wrap`] runs `cmd /D /S /C "<pre-launch>"` alone and waits for it; only when it
+//!   succeeds is the game's command returned, its words passed as they are, never read by cmd
+//!   (which would expand a `%NAME%` in a server address or a folder's name).
 //!
 //! Without a pre-launch command the wrapper is the program itself, and no shell runs.
 use crate::backend::split_args;
@@ -337,15 +339,7 @@ pub fn after_exit(
         return None;
     }
     let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("cmd.exe");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            c.raw_arg(format!("/D /S /C \"{line}\""));
-        }
-        #[cfg(not(windows))]
-        c.args(["/D", "/S", "/C", line]);
-        c
+        cmd_line(line)
     } else {
         let mut c = Command::new("/bin/sh");
         c.arg("-c").arg(line);
@@ -355,6 +349,19 @@ pub fn after_exit(
         .envs(vars.iter().map(|(k, v)| (k, v)))
         .envs(&launch.env);
     Some(cmd)
+}
+
+/// `cmd /D /S /C "<line>"`: the player's own line, as cmd reads it.
+fn cmd_line(line: &str) -> Command {
+    let mut c = Command::new("cmd.exe");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.raw_arg(format!("/D /S /C \"{line}\""));
+    }
+    #[cfg(not(windows))]
+    c.args(["/D", "/S", "/C", line]);
+    c
 }
 
 /// Runs the post-exit command, if any, on its own thread: nothing waits for it, its output is
@@ -383,47 +390,6 @@ fn script(pre_launch: &str) -> String {
     )
 }
 
-/// A word quoted for a Windows command line, as programs built with the C runtime read it back.
-fn windows_quote(word: &OsStr) -> String {
-    let word = word.to_string_lossy();
-    if !word.is_empty() && !word.contains([' ', '\t', '"']) {
-        return word.into_owned();
-    }
-    let mut out = String::from("\"");
-    let mut slashes = 0;
-    for c in word.chars() {
-        match c {
-            '\\' => slashes += 1,
-            '"' => {
-                out.extend(std::iter::repeat_n('\\', slashes * 2 + 1));
-                out.push('"');
-                slashes = 0;
-            }
-            c => {
-                out.extend(std::iter::repeat_n('\\', slashes));
-                out.push(c);
-                slashes = 0;
-            }
-        }
-    }
-    out.extend(std::iter::repeat_n('\\', slashes * 2));
-    out.push('"');
-    out
-}
-
-/// `word` with a caret before each character cmd.exe acts on, so cmd runs no part of it and
-/// removes the carets before the program reads it.
-fn cmd_escape(word: &str) -> String {
-    let mut out = String::with_capacity(word.len());
-    for c in word.chars() {
-        if "()%!^\"<>&|".contains(c) {
-            out.push('^');
-        }
-        out.push(c);
-    }
-    out
-}
-
 /// How [`wrap`] runs a command on each system, apart from the variables and the folder: the
 /// program and its arguments.
 #[derive(Debug, PartialEq, Eq)]
@@ -435,8 +401,11 @@ pub enum Plan {
         script: String,
         words: Vec<OsString>,
     },
-    /// `cmd /D /V:OFF /S /C "<line>"`: the line as cmd reads it.
-    Cmd { line: String },
+    /// `cmd /D /S /C "<pre_launch>"` first, waited for; then `words` as given, if it succeeded.
+    First {
+        pre_launch: String,
+        words: Vec<OsString>,
+    },
 }
 
 /// The plan for `words` (the game's program and arguments) with `launch`, on Windows or not,
@@ -452,32 +421,58 @@ pub fn plan(launch: &Launch, words: Vec<OsString>, windows: bool, found: &Found)
             script: script(pre),
             words: all,
         },
-        (false, true) => Plan::Cmd {
-            line: format!(
-                "{pre} && {}",
-                all.iter()
-                    .enumerate()
-                    .map(|(i, w)| match windows_quote(w) {
-                        // The program keeps its plain quotes: cmd finds it by them, and escaped they
-                        // would split a path with a space.
-                        w if i == 0 && w.starts_with('"') => w,
-                        w => cmd_escape(&w),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ),
+        (false, true) => Plan::First {
+            pre_launch: pre.to_owned(),
+            words: all,
         },
     }
 }
 
+/// `to` gets `from`'s folder and variables.
+fn same_place(from: &Command, to: &mut Command) {
+    if let Some(dir) = from.get_current_dir() {
+        to.current_dir(dir);
+    }
+    for (key, value) in from.get_envs() {
+        match value {
+            Some(value) => to.env(key, value),
+            None => to.env_remove(key),
+        };
+    }
+}
+
+/// Runs the pre-launch `line` in `game`'s folder with its variables and waits for it. Err, with
+/// the end of what it printed, when it fails: the game must not start.
+fn run_first(line: &str, game: &Command) -> Result<(), String> {
+    let mut cmd = cmd_line(line);
+    same_place(game, &mut cmd);
+    crate::process::hide_console(&mut cmd);
+    let out = cmd
+        .output()
+        .map_err(|e| format!("The pre-launch command didn't run: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let printed = String::from_utf8_lossy(&[out.stdout, out.stderr].concat()).into_owned();
+    let lines: Vec<&str> = printed.trim().lines().collect();
+    let code = out.status.code().unwrap_or(-1);
+    Err(format!(
+        "The pre-launch command failed (exit {code}), so the game did not start.\n{}",
+        lines[lines.len().saturating_sub(20)..].join("\n")
+    )
+    .trim_end()
+    .to_owned())
+}
+
 /// The game's command run with `launch`: a new command with the same folder and variables,
-/// plus the instance's variables. Call it last, after every argument is added.
-pub fn wrap(mut cmd: Command, launch: &Launch) -> Command {
+/// plus the instance's variables. Call it last, after every argument is added. On Windows it
+/// runs the pre-launch command first and is Err when that fails.
+pub fn wrap(mut cmd: Command, launch: &Launch) -> Result<Command, String> {
     crate::run_leases::snapshot(&mut cmd);
     #[cfg(windows)]
     let cmd = crate::windows_runtime::redirect(cmd);
     if launch.is_empty() {
-        return cmd;
+        return Ok(cmd);
     }
     let words: Vec<OsString> = std::iter::once(cmd.get_program().to_owned())
         .chain(cmd.get_args().map(OsStr::to_owned))
@@ -487,43 +482,27 @@ pub fn wrap(mut cmd: Command, launch: &Launch) -> Command {
         true => Found::here(),
         false => Found::default(),
     };
-    let mut out = match plan(launch, words, cfg!(windows), &found) {
-        Plan::Direct(words) => {
-            let mut c = Command::new(&words[0]);
-            c.args(&words[1..]);
-            c
-        }
+    let direct = |words: &[OsString]| {
+        let mut c = Command::new(&words[0]);
+        c.args(&words[1..]);
+        c
+    };
+    let (mut out, first) = match plan(launch, words, cfg!(windows), &found) {
+        Plan::Direct(words) => (direct(&words), None),
         Plan::Shell { script, words } => {
             let mut c = Command::new("/bin/sh");
             c.arg("-c").arg(script).arg("sunrise").args(words);
-            c
+            (c, None)
         }
-        Plan::Cmd { line } => {
-            let mut c = Command::new("cmd.exe");
-            // `/V:OFF`: `cmd_escape`'s `^!` holds only with delayed expansion off, and the
-            // `DelayedExpansion` registry value can turn it on.
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                c.raw_arg(format!("/D /V:OFF /S /C \"{line}\""));
-            }
-            #[cfg(not(windows))]
-            c.args(["/D", "/V:OFF", "/S", "/C", &line]);
-            c
-        }
+        Plan::First { pre_launch, words } => (direct(&words), Some(pre_launch)),
     };
-    if let Some(dir) = cmd.get_current_dir() {
-        out.current_dir(dir);
-    }
-    for (key, value) in cmd.get_envs() {
-        match value {
-            Some(value) => out.env(key, value),
-            None => out.env_remove(key),
-        };
-    }
+    same_place(&cmd, &mut out);
     out.envs(switch_env(launch, &found));
     apply_environment(&mut out, launch);
-    out
+    if let Some(line) = first {
+        run_first(&line, &out)?;
+    }
+    Ok(out)
 }
 
 /// Apply the final instance environment before either selection or process wrapping.

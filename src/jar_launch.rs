@@ -17,8 +17,8 @@ pub fn client(mut command: Command, launch: Launch, run: Option<String>, tx: Sen
         let prepared = with_consent(&tx, |permission| {
             jars::prepare_launch(&mut command, &launch, permission)
         })
-        .map(|()| launch::wrap(command, &launch))
-        .map_err(|error| error.to_string());
+        .map_err(|error| error.to_string())
+        .and_then(|()| launch::wrap(command, &launch));
         let _ = tx.send(Msg::JarClient {
             run,
             prepared: Box::new(prepared),

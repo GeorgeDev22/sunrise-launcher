@@ -98,93 +98,17 @@ fn each_system_gets_its_plan() {
             true,
             &Found::default()
         ),
-        Plan::Cmd {
-            line: r#"echo hi && nice -n 5 C:\Sunrise\sunrise-client.exe --world ^"My World^""#
-                .into()
-        }
-    );
-}
-
-#[test]
-fn windows_words_are_quoted_as_the_c_runtime_reads_them() {
-    let q = |w: &str| windows_quote(OsStr::new(w));
-    assert_eq!(q("plain"), "plain");
-    assert_eq!(q("two words"), "\"two words\"");
-    assert_eq!(q(""), "\"\"");
-    assert_eq!(q(r#"say "hi""#), r#""say \"hi\"""#);
-    assert_eq!(q(r"C:\My Folder\"), r#""C:\My Folder\\""#);
-}
-
-/// The characters cmd.exe acts on as operators in `line`: outside quotes and not after a caret.
-fn cmd_operators(line: &str) -> String {
-    let (mut out, mut quoted, mut chars) = (String::new(), false, line.chars());
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => quoted = !quoted,
-            '^' if !quoted => {
-                chars.next();
-            }
-            '&' | '|' | '<' | '>' | '(' | ')' if !quoted => out.push(c),
-            _ => {}
-        }
-    }
-    out
-}
-
-#[test]
-fn windows_game_words_are_escaped_for_cmd_after_a_pre_launch_command() {
-    let pre = "echo %USERNAME% & echo hi";
-    let launch = Launch {
-        pre_launch: pre.into(),
-        ..Launch::default()
-    };
-    let line = |words: &[&str]| {
-        let Plan::Cmd { line } = plan(&launch, os(words), true, &Found::default()) else {
-            panic!()
-        };
-        // The player's own text stays as typed.
-        let Some(game) = line.strip_prefix(&format!("{pre} && ")) else {
-            panic!("{line}")
-        };
-        game.to_owned()
-    };
-    assert_eq!(
-        line(&["game.exe", "--server", "a&calc"]),
-        "game.exe --server a^&calc"
-    );
-    assert_eq!(cmd_operators(&line(&["game.exe", r#"x" & calc & ""#])), "");
-    assert_eq!(line(&["game.exe", "%PATH%"]), "game.exe ^%PATH^%");
-    // cmd removes the carets, so the game reads `"My World"`: one argument.
-    assert_eq!(
-        line(&["game.exe", "--world", "My World"]),
-        r#"game.exe --world ^"My World^""#
-    );
-    // cmd finds the program by its own quotes; escaped, they would split the path at the space.
-    assert_eq!(
-        line(&[r"C:\Program Files (x86)\game.exe"]),
-        r#""C:\Program Files (x86)\game.exe""#
-    );
-    // `^!` keeps `!VAR!` as it is only with delayed expansion off, which the registry can turn on.
-    #[cfg(windows)]
-    {
-        let cmd = wrap(Command::new("game.exe"), &launch);
-        let args = cmd.get_args().collect::<Vec<_>>();
-        assert!(
-            args[0].to_string_lossy().starts_with("/D /V:OFF /S /C \""),
-            "{args:?}"
-        );
-    }
-    // Without cmd the words are passed on as they are.
-    let words = os(&["game.exe", "--server", "a&calc"]);
-    assert_eq!(
-        plan(&Launch::default(), words.clone(), true, &Found::default()),
-        Plan::Direct(words.clone())
-    );
-    assert_eq!(
-        plan(&launch, words.clone(), false, &Found::default()),
-        Plan::Shell {
-            script: script(pre),
-            words
+        // cmd.exe reads the player's line only: the words start as they are, after it.
+        Plan::First {
+            pre_launch: "echo hi".into(),
+            words: os(&[
+                "nice",
+                "-n",
+                "5",
+                r"C:\Sunrise\sunrise-client.exe",
+                "--world",
+                "My World"
+            ])
         }
     );
 }
@@ -193,9 +117,84 @@ fn windows_game_words_are_escaped_for_cmd_after_a_pre_launch_command() {
 fn nothing_to_add_leaves_the_command_as_it_is() {
     let mut cmd = Command::new("/opt/game");
     cmd.arg("--x").env("A", "1");
-    let out = wrap(cmd, &Launch::default());
+    let out = wrap(cmd, &Launch::default()).unwrap();
     assert_eq!(out.get_program(), "/opt/game");
     assert_eq!(out.get_args().collect::<Vec<_>>(), ["--x"]);
+}
+
+/// The "game" of the Windows test below: run as `<exe> --exact <this test> -- <words…>`, it
+/// writes the words it received to the file `SUNRISE_TEST_WORDS` names. Run alone, it does nothing.
+#[test]
+fn child_writes_its_words() {
+    if let Some(path) = std::env::var_os("SUNRISE_TEST_WORDS") {
+        let words: Vec<String> = std::env::args().skip(4).collect();
+        std::fs::write(path, serde_json::to_string(&words).unwrap()).unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_game_gets_its_words_as_they_are_after_its_pre_launch_command() {
+    let exe = std::env::current_exe().unwrap();
+    // A program path cmd.exe would expand, with a space and brackets (same volume: a hard link).
+    let dir = exe
+        .parent()
+        .unwrap()
+        .join(format!("sunrise %USERNAME% {}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let game_exe = dir.join("game (x86).exe");
+    std::fs::hard_link(&exe, &game_exe).unwrap();
+    let words = [
+        "--server",
+        "a&calc",
+        "%PATH%",
+        "%USERNAME",
+        "100%",
+        r#"say "hi" ^ | < > ( )"#,
+        "!OS!",
+        "My World",
+        r"C:\trailing\",
+        "",
+    ];
+    let game = || {
+        let mut cmd = Command::new(&game_exe);
+        cmd.args(["--exact", "launch::tests::child_writes_its_words", "--"])
+            .args(words)
+            .current_dir(&dir)
+            .env("SUNRISE_TEST_WORDS", dir.join("words.json"));
+        cmd
+    };
+    let launch = Launch {
+        pre_launch: "echo %INST_NAME%> pre.txt".into(),
+        ..Launch::default()
+    };
+    let mut cmd = game();
+    cmd.env("INST_NAME", "My Pack");
+    let status = wrap(cmd, &launch).unwrap().status().unwrap();
+    assert!(status.success(), "{status:?}");
+    // The player's own line is cmd's to read.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("pre.txt")).unwrap(),
+        "My Pack\r\n"
+    );
+    let got: Vec<String> =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("words.json")).unwrap()).unwrap();
+    assert_eq!(got, words);
+
+    // The game starts only after its pre-launch command succeeds.
+    std::fs::remove_file(dir.join("words.json")).unwrap();
+    let failing = Launch {
+        pre_launch: "echo not ready & exit /b 3".into(),
+        ..Launch::default()
+    };
+    let error = wrap(game(), &failing).unwrap_err();
+    assert_eq!(
+        error,
+        "The pre-launch command failed (exit 3), so the game did not start.\nnot ready"
+    );
+    assert!(!dir.join("words.json").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[cfg(unix)]
@@ -221,7 +220,7 @@ fn the_wrapped_game_runs_after_its_pre_launch_command_in_its_folder() {
         env: parse_env("FROM_INSTANCE=\"it works\"").unwrap(),
         ..Launch::default()
     };
-    let out = wrap(game, &launch).output().unwrap();
+    let out = wrap(game, &launch).unwrap().output().unwrap();
     assert!(out.status.success(), "{out:?}");
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
@@ -239,7 +238,7 @@ fn the_wrapped_game_runs_after_its_pre_launch_command_in_its_folder() {
     let mut game = Command::new("/bin/sh");
     game.args(["-c", "echo started > started.txt"])
         .current_dir(&dir);
-    let out = wrap(game, &failing).output().unwrap();
+    let out = wrap(game, &failing).unwrap().output().unwrap();
     assert_eq!(out.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&out.stderr).contains("pre-launch command failed (exit 3)"));
     assert!(!dir.join("started.txt").exists());
@@ -334,6 +333,8 @@ fn the_post_exit_command_runs_with_the_instance_variables() {
 #[test]
 fn the_account_session_reaches_the_game_through_every_launch() {
     let source = std::env::temp_dir().join("sunrise-session-launch");
+    // On Windows the pre-launch command runs in it.
+    std::fs::create_dir_all(&source).unwrap();
     let launches = [
         Launch::default(),
         Launch {
@@ -354,7 +355,7 @@ fn the_account_session_reaches_the_game_through_every_launch() {
             ..Default::default()
         };
         assert_eq!(session.apply(&mut cmd), None);
-        let cmd = wrap(cmd, &launch);
+        let cmd = wrap(cmd, &launch).unwrap();
         let line = |words: Vec<OsString>| {
             words
                 .iter()
@@ -389,7 +390,7 @@ fn the_account_session_reaches_the_game_through_every_launch() {
         offline.apply(&mut cmd).as_deref(),
         Some("No answer from Microsoft")
     );
-    let cmd = wrap(cmd, &Launch::default());
+    let cmd = wrap(cmd, &Launch::default()).unwrap();
     assert!(!cmd.get_args().any(|a| a == "--session-file"));
     assert!(cmd
         .get_envs()
