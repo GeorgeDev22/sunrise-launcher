@@ -113,22 +113,19 @@ fn walk(home: &Path, dir: &Path, skip: &[&str], out: &mut Vec<(String, PathBuf)>
     }
 }
 
-/// A world's level.dat without the player's UUID; unreadable, it goes as it is.
 /// `options.txt` without its `lastServer:` line: the address the player last connected to is theirs,
-/// not part of the instance they share. Anything that is not text is passed on as it is.
+/// not part of the instance they share. Filtered as bytes, so a file that is not UTF-8 loses it too.
 fn shareable_options(file: &Path) -> Result<Vec<u8>, String> {
     let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
-    let text = match String::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(not_text) => return Ok(not_text.into_bytes()),
-    };
-    Ok(text
-        .split_inclusive('\n')
-        .filter(|line| !line.starts_with("lastServer:"))
-        .collect::<String>()
-        .into_bytes())
+    Ok(bytes
+        .split_inclusive(|b| *b == b'\n')
+        .filter(|line| !line.starts_with(b"lastServer:"))
+        .flatten()
+        .copied()
+        .collect())
 }
 
+/// A world's level.dat without the player's UUID; unreadable, it goes as it is.
 fn shareable_level(file: &Path) -> Result<Vec<u8>, String> {
     let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let mut raw = Vec::new();

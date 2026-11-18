@@ -129,6 +129,19 @@ fn an_exported_options_file_does_not_carry_the_last_server() {
 }
 
 #[test]
+fn an_options_file_that_is_not_utf8_does_not_carry_the_last_server() {
+    let home = home("last-server-latin1");
+    put(
+        &home.join("options.txt"),
+        b"lang:fr_ch\nlastServer:203.0.113.7:25565\nname:caf\xE9\xFF\n",
+    );
+    let out = home.join("out/Share.zip");
+    export(&home, "Share", Format::Zip, &[], &[], &out).unwrap();
+    assert_eq!(read(&out, "options.txt"), b"lang:fr_ch\nname:caf\xE9\xFF\n");
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
 fn a_zip_has_the_instance_and_the_picked_world_and_nothing_private() {
     let home = home("zip");
     let out = home.join("out/Hardcore.zip");
