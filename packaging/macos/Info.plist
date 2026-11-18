@@ -30,6 +30,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Horizon is MIT licensed. Not an official Minecraft product; not approved by or associated with Mojang or Microsoft.</string>
+	<string>Sunrise is under the PolyForm Shield licence; code from Horizon is also under its MIT licence. Not an official Minecraft product; not approved by or associated with Mojang or Microsoft.</string>
 </dict>
 </plist>
