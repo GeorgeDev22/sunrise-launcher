@@ -157,6 +157,11 @@ impl Modpack {
     /// `home`, each checked again.
     pub fn extract_overrides(path: &Path, home: &Path) -> Result<Vec<PathBuf>, String> {
         let pack = Modpack::read(path)?;
+        // Every destination first: refusing one after an earlier override was written would lose
+        // the file that override replaced.
+        for name in &pack.overrides {
+            check_destination(home, name)?;
+        }
         let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
         let mut written = Vec::new();
@@ -187,7 +192,6 @@ impl Modpack {
         let mut entry = zip
             .by_name(&format!("{OVERRIDES}{name}"))
             .map_err(|e| format!("{name}: {e}"))?;
-        check_destination(home, name)?;
         let target = home.join(name);
         if let Some(dir) = target.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -355,7 +359,8 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
     }
 
     /// Links `home/resourcepacks` to a folder outside `home` with `link(outside, at)`, then checks
-    /// that an override for `resourcepacks/pack.zip` is refused and the folder outside is left alone.
+    /// that an override for `resourcepacks/pack.zip` is refused and the folder outside is left alone,
+    /// and so is the player's `options.txt`, which the pack also overrides and imports first.
     fn refuses_a_link(name: &str, link: impl FnOnce(&Path, &Path) -> std::io::Result<()>) {
         let dir = scratch(name);
         let outside = dir.join("outside");
@@ -363,6 +368,7 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(outside.join("pack.zip"), b"not the pack's").unwrap();
+        std::fs::write(home.join("options.txt"), b"mine\n").unwrap();
         if let Err(e) = link(&outside, &home.join("resourcepacks")) {
             eprintln!("skipped: cannot create a symlink here ({e})");
             std::fs::remove_dir_all(&dir).unwrap();
@@ -371,9 +377,13 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
         let path = write_pack(
             &dir,
             PACK,
-            &[("overrides/resourcepacks/pack.zip", b"from the pack")],
+            &[
+                ("overrides/options.txt", b"from the pack\n"),
+                ("overrides/resourcepacks/pack.zip", b"from the pack"),
+            ],
         );
         assert!(Modpack::extract_overrides(&path, &home).is_err());
+        assert_eq!(std::fs::read(home.join("options.txt")).unwrap(), b"mine\n");
         assert_eq!(
             std::fs::read(outside.join("pack.zip")).unwrap(),
             b"not the pack's"
