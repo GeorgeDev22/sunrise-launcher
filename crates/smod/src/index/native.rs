@@ -34,6 +34,9 @@ impl Bundle {
         if !package.is_native() {
             return Err("not a native package".into());
         }
+        // An install is the first open: the runtime files' hashes are checked here, before the
+        // download is accepted.
+        package.read_runtime(path)?;
         let mut files = BTreeMap::new();
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
@@ -107,6 +110,26 @@ mod tests {
         let result = Bundle::read(&path);
         std::fs::remove_file(path).unwrap();
         result
+    }
+
+    #[test]
+    fn an_install_refuses_runtime_bytes_that_do_not_match_the_manifest() {
+        let manifest = format!(
+            "{}[runtime]\n\"nav.bin\"='{}'\n",
+            manifest(),
+            crate::manifest::sha512_of(b"tables")
+        );
+        let bundle = read("runtime-ok", &manifest, &[("runtime/nav.bin", b"tables")]).unwrap();
+        assert_eq!(bundle.files["runtime/nav.bin"], b"tables");
+        // The same name and size, different bytes.
+        let error = read(
+            "runtime-edited",
+            &manifest,
+            &[("runtime/nav.bin", b"tablez")],
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("runtime/nav.bin"), "{error}");
     }
 
     #[test]

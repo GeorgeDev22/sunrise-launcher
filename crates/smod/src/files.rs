@@ -105,6 +105,18 @@ pub(crate) fn folder_files(root: &Path) -> Result<Vec<(String, u64)>, String> {
     Ok(out)
 }
 
+/// The files under a package folder's `runtime/`, as `(name below it, bytes)`. Symbolic links and
+/// other non-files are refused, not followed.
+pub(crate) fn runtime_folder_files(root: &Path) -> Result<Vec<(String, u64)>, String> {
+    let mut out = Vec::new();
+    walk(root, &root.join(crate::manifest::RUNTIME_DIR), &mut out)?;
+    let prefix = format!("{}/", crate::manifest::RUNTIME_DIR);
+    for (name, _) in &mut out {
+        *name = name.strip_prefix(&prefix).unwrap_or(name).to_owned();
+    }
+    Ok(out)
+}
+
 fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, u64)>) -> Result<(), String> {
     match std::fs::symlink_metadata(dir) {
         Ok(m) if !m.is_dir() => {

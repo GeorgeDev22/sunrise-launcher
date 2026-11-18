@@ -454,3 +454,52 @@ fn shader_packs_pass_the_game_s_own_check() {
     assert_eq!(Kind::Shader.extension(), Some("sshader"));
     assert!(open(&Kind::Shader).is_ok());
 }
+
+/// A wasm package (a module the loader accepts, its `[wasm]` hash and one `runtime/` file) as a `.smod`.
+fn wasm_package(name: &str, nav: &[u8]) -> PathBuf {
+    use std::io::Write;
+    let module = wat::parse_str(
+        r#"(module (@custom "dylink.0" "\01\04\00\00\00\00")
+            (func (export "sunrise_layout")) (func (export "sunrise_in")) (func (export "sunrise_hook")))"#,
+    )
+    .unwrap();
+    let module = module.as_slice();
+    let manifest = format!(
+        "id='ruby'\nname='Ruby'\nversion='0.1.0'\napi='0.2'\ncapabilities=['registries']\n\
+         [wasm]\nsha512='{}'\ntoolchain='test'\n[runtime]\n\"nav.bin\"='{}'\n",
+        crate::manifest::sha512_of(module),
+        crate::manifest::sha512_of(b"tables"),
+    );
+    let path = std::env::temp_dir().join(format!("{name}-{}.smod", std::process::id()));
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    for (entry, bytes) in [
+        (crate::manifest::MANIFEST, manifest.as_bytes()),
+        ("mod.wasm", module),
+        (
+            "Cargo.toml",
+            b"[package]\nname='ruby'\nversion='0.1.0'\n".as_slice(),
+        ),
+        ("src/lib.rs", b"pub fn hooks() {}".as_slice()),
+        ("runtime/nav.bin", nav),
+    ] {
+        zip.start_file(entry, options).unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+    zip.finish().unwrap();
+    path
+}
+
+#[test]
+fn installing_a_wasm_mod_checks_its_runtime_files_against_the_manifest() {
+    let good = wasm_package("runtime-wasm-ok", b"tables");
+    let facts = inspect(&Kind::Mod, &good);
+    // The same name and length, different bytes.
+    let edited = wasm_package("runtime-wasm-edited", b"tablez");
+    let refused = inspect(&Kind::Mod, &edited);
+    std::fs::remove_file(good).unwrap();
+    std::fs::remove_file(edited).unwrap();
+    assert_eq!(facts.unwrap().id.as_deref(), Some("ruby"));
+    let error = refused.unwrap_err();
+    assert!(error.contains("runtime/nav.bin"), "{error}");
+}

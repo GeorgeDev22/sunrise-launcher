@@ -54,6 +54,13 @@ pub fn read_native(path: &Path) -> Result<AdjacentManifest, ReadError> {
             id: package.manifest.id,
         });
     }
+    // A hand-edited folder is refused here, as in the game's own scan.
+    package
+        .read_runtime(path)
+        .map_err(|reason| ReadError::Package {
+            path: path.to_owned(),
+            reason,
+        })?;
     Ok(AdjacentManifest {
         path: path.to_owned(),
         manifest: package.manifest,
@@ -120,6 +127,27 @@ mod tests {
         assert_eq!(candidates[0].path, first);
         fs::write(home.0.join("native-mods.json"), "not JSON").unwrap();
         assert_eq!(adjacent_manifests(&program).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_native_package_opens_with_its_runtime_files_checked_once() {
+        let home = Scratch::new();
+        let dir = home.package("baked");
+        let hash = crate::manifest::sha512_of(b"tables");
+        let manifest = fs::read_to_string(dir.join("sunrise-mod.toml")).unwrap();
+        fs::write(
+            dir.join("sunrise-mod.toml"),
+            format!("{manifest}[runtime]\n\"nav.bin\"='{hash}'\n"),
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("runtime")).unwrap();
+        fs::write(dir.join("runtime/nav.bin"), b"tables").unwrap();
+        let package = read_native(&dir).unwrap();
+        assert_eq!(package.manifest.id, "baked");
+        // A folder edited by hand is refused at open, naming the file.
+        fs::write(dir.join("runtime/nav.bin"), b"edited").unwrap();
+        let error = read_native(&dir).unwrap_err().to_string();
+        assert!(error.contains("runtime/nav.bin"), "{error}");
     }
 
     #[test]
