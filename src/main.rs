@@ -265,7 +265,12 @@ struct Launcher {
         std::cell::RefCell<std::collections::HashMap<String, Option<native_status::Build>>>,
     /// This attempt's build log (`native_log_page.rs`).
     native_log: native_log_page::NativeLog,
+    /// What the Settings › Storage row says about the last move or choice.
     location_error: Option<String>,
+    /// The data folder could not be opened at start: the only state that keeps Play and the
+    /// edits that write there off. A move that failed or a folder that was refused leaves the
+    /// current folder working, so those only say so in `location_error`.
+    location_unavailable: bool,
     location_note: Option<String>,
     /// The empty folder picked for a data move, until it is confirmed or cancelled.
     location_target: Option<std::path::PathBuf>,

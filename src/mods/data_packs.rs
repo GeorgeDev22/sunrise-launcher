@@ -285,7 +285,7 @@ impl Launcher {
         }
         let Some(home) = self
             .selected_instance()
-            .filter(|i| i.java.is_none() && self.location_error.is_none())
+            .filter(|i| i.java.is_none() && !self.location_unavailable)
             .map(|i| i.home.clone())
         else {
             self.ui.mods.notice = Some(Err(tr("Select a Sunrise setup first.").to_string()));
@@ -349,7 +349,7 @@ impl Launcher {
         self.data_list(cx);
         let query = self.ui.mods.have.text().trim().to_lowercase();
         let editable =
-            self.location_error.is_none() && self.mods_locked().is_none() && !self.mutating();
+            !self.location_unavailable && self.mods_locked().is_none() && !self.mutating();
         let d = &self.ui.mods.data;
         let mut worlds: Vec<(World, Vec<Listed>)> =
             d.list.as_ref().map_or_else(Vec::new, |l| l.worlds.clone());

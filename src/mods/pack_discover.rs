@@ -150,7 +150,7 @@ impl Launcher {
     /// The selected setup that packs may go into: a Sunrise one, with its folder readable.
     fn pack_setup(&self) -> Option<(String, PathBuf)> {
         self.selected_instance()
-            .filter(|i| i.java.is_none() && self.location_error.is_none())
+            .filter(|i| i.java.is_none() && !self.location_unavailable)
             .map(|i| (i.id.clone(), i.home.clone()))
     }
 

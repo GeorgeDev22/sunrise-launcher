@@ -23,6 +23,12 @@ pub(super) fn startup_error() -> Option<String> {
         })
 }
 
+/// Whether the data folder could not be opened at start. A move that failed
+/// (`SUNRISE_RELOCATION_ERROR`) leaves the old folder in use, so it does not count.
+pub(super) fn unavailable_at_start() -> bool {
+    sunrise_launcher::data_location::startup_error().is_some()
+}
+
 fn open_error(error: &str) -> String {
     trf(
         "Could not open the data folder: {error}",
@@ -273,5 +279,19 @@ impl Launcher {
             );
         }
         body
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_move_leaves_play_enabled_and_only_an_unopened_folder_disables_it() {
+        // The message of a failed move is shown, but is not what gates Play.
+        std::env::set_var("SUNRISE_RELOCATION_ERROR", "disk full");
+        assert!(startup_error().is_some_and(|e| e.contains("disk full")));
+        assert!(!unavailable_at_start(), "the old folder still works");
+        std::env::remove_var("SUNRISE_RELOCATION_ERROR");
     }
 }

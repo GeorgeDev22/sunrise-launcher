@@ -84,7 +84,7 @@ impl Launcher {
     }
 
     fn can_edit_packs(&self, home: &Path, kind: Kind) -> bool {
-        self.location_error.is_none()
+        !self.location_unavailable
             && self.mods_locked().is_none()
             && !self.mutating()
             && self.ui.page == Page::Packs

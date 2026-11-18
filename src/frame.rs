@@ -641,10 +641,10 @@ impl Launcher {
                 ))
             })
         };
-        let enabled = !busy && self.location_error.is_none();
+        let enabled = !busy && !self.location_unavailable;
         let ink = rgb(0x221203);
         // The cat may sleep on Play only while Play is idle and the bar has nothing to say.
-        let free = quiet && !busy && self.client.is_none() && self.location_error.is_none();
+        let free = quiet && !busy && self.client.is_none() && !self.location_unavailable;
         let (lane, on_play) = self.cat(action.is_none(), free, window, cx);
         let play = div()
             .id("alt-play")

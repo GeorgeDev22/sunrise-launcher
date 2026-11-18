@@ -115,6 +115,7 @@ impl Launcher {
             native_log: Default::default(),
             // The first draw takes the launcher theme from Settings.
             location_error: location_page::startup_error(),
+            location_unavailable: location_page::unavailable_at_start(),
             location_note: location_page::startup_note(),
             location_target: None,
             args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
