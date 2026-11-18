@@ -75,14 +75,14 @@ pub fn saved_with<'a>(worlds: &'a [World], ids: &[String]) -> Vec<(&'a World, Ve
 
 /// The worlds in a game folder's `saves/`, the last played first.
 pub fn list(home: &Path) -> Vec<World> {
-    let mut worlds: Vec<World> = fs::read_dir(home.join("saves"))
+    let mut worlds: Vec<Scanned> = fs::read_dir(home.join("saves"))
         .into_iter()
         .flatten()
         .flatten()
-        .filter_map(|e| read(&e.path()))
+        .filter_map(|e| scanned_world(&e.path()).ok().flatten())
         .collect();
-    worlds.sort_by_key(|w| std::cmp::Reverse(w.last_played));
-    worlds
+    worlds.sort_by_key(|s| std::cmp::Reverse(s.played));
+    worlds.into_iter().map(|s| s.world).collect()
 }
 
 /// level.dat: gzip, as vanilla writes it, or plain. Read with the limits the game reads a world's
@@ -157,11 +157,15 @@ fn scanned_world(path: &Path) -> std::io::Result<Option<Scanned>> {
         (_, 3) => "Spectator",
         _ => "Survival",
     };
-    let last_played = match number(field("LastPlayed")) {
-        millis if millis > 0 => {
-            UNIX_EPOCH + Duration::from_millis((millis as u64).min(MAX_LAST_PLAYED_MILLIS))
-        }
-        _ => changed,
+    let (played, last_played) = match number(field("LastPlayed")) {
+        millis if millis > 0 => (
+            Duration::from_millis(millis as u64),
+            UNIX_EPOCH + Duration::from_millis((millis as u64).min(MAX_LAST_PLAYED_MILLIS)),
+        ),
+        _ => (
+            changed.duration_since(UNIX_EPOCH).unwrap_or_default(),
+            changed,
+        ),
     };
     let icon = path.join("icon.png");
     // `[{ModId, ModVersion}]` lists, as `save::level_mods` writes them; anything else reads as none.
@@ -198,7 +202,11 @@ fn scanned_world(path: &Path) -> std::io::Result<Option<Scanned>> {
         icon: icon.is_file().then_some(icon),
         mods,
     };
-    Ok(Some(Scanned { world, known }))
+    Ok(Some(Scanned {
+        world,
+        known,
+        played,
+    }))
 }
 
 /// A world in `saves/` and whether the list of its mods could be read. A world whose level.dat
@@ -207,6 +215,9 @@ fn scanned_world(path: &Path) -> std::io::Result<Option<Scanned>> {
 struct Scanned {
     pub world: World,
     pub known: bool,
+    /// `LastPlayed` as saved, the order of [`list`]: `world.last_played` is clamped, which would
+    /// lose the order of two worlds played past the clamp.
+    pub played: Duration,
 }
 
 /// Every world of `home`'s `saves/`, failing closed. A missing `saves/` is no worlds; any other

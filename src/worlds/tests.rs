@@ -279,3 +279,23 @@ fn a_last_played_too_far_ahead_for_a_system_time_is_clamped_not_a_panic() {
     );
     fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn worlds_played_past_the_clamp_keep_the_newest_first() {
+    let home = scratch("last-played-order");
+    // Both later than the clamp, the older one first in the folder.
+    for (folder, millis) in [("A", i64::MAX - 1), ("B", i64::MAX)] {
+        world(
+            &home,
+            folder,
+            vec![
+                ("LevelName", name("Twin")),
+                ("LastPlayed", Tag::Long(millis)),
+            ],
+        );
+    }
+    let folders: Vec<String> = list(&home).into_iter().map(|w| w.folder).collect();
+    assert_eq!(folders, ["B", "A"]);
+    assert_eq!(find(&home, "twin").unwrap().folder, "B");
+    fs::remove_dir_all(home).unwrap();
+}
