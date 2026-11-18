@@ -86,7 +86,11 @@ fn connecting_host(text: &str) -> String {
         match comma {
             Some(comma) => {
                 let host = &after[..comma];
-                out.push_str(if host == IP || host == PRIVATE { host } else { PRIVATE });
+                out.push_str(if host == IP || host == PRIVATE {
+                    host
+                } else {
+                    PRIVATE
+                });
                 rest = &after[comma..];
             }
             None => rest = after,
