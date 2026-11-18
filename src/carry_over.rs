@@ -50,7 +50,13 @@ pub fn at_start() {
 pub fn carry_over(data: &Path, config: &Path) -> Result<bool, String> {
     let launcher = crate::identity::launcher_folder_in(data);
     let game = crate::identity::game_folder_in(data);
+    let stage = launcher.with_file_name(".carry-over");
     if launcher.exists() || game.exists() {
+        // A copy that reached both targets but could not remove its stage (a file appearing in
+        // it mid-delete) left it beside them; nothing reads it, so it goes on a later start.
+        if launcher.exists() && game.exists() && stage.exists() {
+            discard(&stage);
+        }
         return Ok(false);
     }
     let Some(source) = crate::identity::EARLIER
@@ -61,7 +67,6 @@ pub fn carry_over(data: &Path, config: &Path) -> Result<bool, String> {
     else {
         return Ok(false);
     };
-    let stage = launcher.with_file_name(".carry-over");
     if stage.exists() {
         fs::remove_dir_all(&stage).map_err(|e| format!("{}: {e}", stage.display()))?;
     }
@@ -89,8 +94,24 @@ pub fn carry_over(data: &Path, config: &Path) -> Result<bool, String> {
     crate::relocation::prepare_paths(&staged, &source, &target)?;
     fs::rename(&staged.launcher, &launcher).map_err(|e| format!("{}: {e}", launcher.display()))?;
     fs::rename(&staged.game, &game).map_err(|e| format!("{}: {e}", game.display()))?;
-    let _ = fs::remove_dir_all(&stage);
+    discard(&stage);
     Ok(true)
+}
+
+/// Removes the stage of a finished copy. A failure is reported and leaves it for the next start.
+fn discard(stage: &Path) {
+    if let Err(error) = fs::remove_dir_all(stage) {
+        eprintln!(
+            "{}",
+            crate::i18n::trf(
+                "Could not remove {path}, left from copying the earlier launcher's data; the next start tries again: {error}",
+                &[
+                    ("path", &stage.display().to_string()),
+                    ("error", &error.to_string()),
+                ],
+            )
+        );
+    }
 }
 
 /// An earlier launcher's folders, when its launcher or game folder exists: where its
@@ -194,6 +215,32 @@ mod tests {
             fs::read(game.join("saves/World/level.dat")).unwrap(),
             [1, 2, 3]
         );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_stage_left_beside_a_finished_copy_is_removed_on_a_later_start() {
+        let base = std::env::temp_dir().join(format!("hz-carry-stage-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (data, config) = (base.join("data"), base.join("config"));
+        let launcher = crate::identity::launcher_folder_in(&data);
+        let game = crate::identity::game_folder_in(&data);
+        let stage = launcher.with_file_name(".carry-over");
+        fs::create_dir_all(stage.join("game/saves")).unwrap();
+        fs::write(stage.join("game/saves/level.dat"), [1]).unwrap();
+        fs::create_dir_all(&launcher).unwrap();
+        fs::write(launcher.join("accounts.json"), "{}").unwrap();
+
+        // Only the launcher folder: the copy may not have finished, so its stage stays.
+        assert_eq!(carry_over(&data, &config), Ok(false));
+        assert!(stage.join("game/saves/level.dat").is_file());
+
+        fs::create_dir_all(game.join("saves")).unwrap();
+        fs::write(game.join("saves/level.dat"), [2]).unwrap();
+        assert_eq!(carry_over(&data, &config), Ok(false));
+        assert!(!stage.exists());
+        assert_eq!(fs::read(game.join("saves/level.dat")).unwrap(), [2]);
+        assert_eq!(fs::read(launcher.join("accounts.json")).unwrap(), b"{}");
         let _ = fs::remove_dir_all(&base);
     }
 }
