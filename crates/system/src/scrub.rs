@@ -59,11 +59,41 @@ impl Scrubber {
         out = replace_tokens(&out, ipv4_at);
         out = replace_tokens(&out, ipv6_at);
         out = replace_tokens(&out, uuid_at);
+        out = connecting_host(&out);
         if let Some(user) = &self.user {
             out = replace_word(&out, user, USER);
         }
         out
     }
+}
+
+/// The game's `Connecting to <host>, <port>` log line (vanilla's, which other launchers read to offer
+/// the server again): the host becomes [`PRIVATE`], unless another rule already replaced it, and the
+/// port stays. Only that exact shape matches: a comma and digits to the end of the line.
+fn connecting_host(text: &str) -> String {
+    const HEAD: &str = "Connecting to ";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(HEAD) {
+        let from = at + HEAD.len();
+        out.push_str(&rest[..from]);
+        let after = &rest[from..];
+        let line = after.find(['\r', '\n']).unwrap_or(after.len());
+        let comma = after[..line].rfind(", ").filter(|comma| {
+            let port = after[comma + 2..line].trim_end();
+            !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+        });
+        match comma {
+            Some(comma) => {
+                let host = &after[..comma];
+                out.push_str(if host.starts_with('<') { host } else { PRIVATE });
+                rest = &after[comma..];
+            }
+            None => rest = after,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `/Users/ana/…`, `/home/ana/…`, `C:\Users\Ana Silva\…` (also JSON-escaped): the folder after
@@ -286,6 +316,47 @@ fn replace_word(text: &str, word: &str, label: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The game logs `Connecting to <host>, <port>` for every connection, as vanilla does: the
+    /// host is private, the port is not. Only that exact shape matches.
+    #[test]
+    fn the_host_of_a_connecting_line_is_private() {
+        let s = Scrubber::bare();
+        assert_eq!(
+            s.scrub("Connecting to play.friends-only.example, 25565"),
+            "Connecting to <private>, 25565"
+        );
+        assert_eq!(
+            s.scrub("[12:00:01] [Server Connector #1/INFO]: Connecting to mc.example.net, 25577\nnext line"),
+            "[12:00:01] [Server Connector #1/INFO]: Connecting to <private>, 25577\nnext line"
+        );
+        // A host the other rules already replaced stays as they wrote it.
+        assert_eq!(
+            s.scrub("Connecting to 203.0.113.7, 25565"),
+            "Connecting to <ip>, 25565"
+        );
+        // The loopback short form is no address the IPv6 rule knows, so the host rule hides it.
+        assert_eq!(
+            s.scrub("Connecting to ::1, 25566"),
+            "Connecting to <private>, 25566"
+        );
+        // Other text that starts the same way is not touched.
+        assert_eq!(
+            s.scrub("Connecting to the server..."),
+            "Connecting to the server..."
+        );
+        assert_eq!(
+            s.scrub("Connecting to the Realm, please wait"),
+            "Connecting to the Realm, please wait"
+        );
+        // Two lines, one of them without a port.
+        assert_eq!(
+            s.scrub(
+                "Connecting to a.example, 1\nConnecting to b.example\nConnecting to c.example, 2"
+            ),
+            "Connecting to <private>, 1\nConnecting to b.example\nConnecting to <private>, 2"
+        );
+    }
 
     /// The lowercased haystack and the text must share their character boundaries, not just their
     /// length: `İ` grows by a byte and U+212A shrinks by two, so a text holding two `İ` and a
