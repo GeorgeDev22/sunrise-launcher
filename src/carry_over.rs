@@ -63,7 +63,7 @@ pub fn carry_over(data: &Path, config: &Path) -> Result<bool, String> {
         // A copy that reached both targets but could not remove its stage (a file appearing in
         // it mid-delete) left it beside them; nothing reads it, so it goes on a later start.
         if launcher.exists() && game.exists() && stage.exists() {
-            discard(&stage);
+            settle(&stage);
         }
         return Ok(false);
     }
@@ -139,9 +139,34 @@ fn resume(stage: &Path, launcher: &Path, game: &Path) -> Result<bool, String> {
         }
     }
     if launcher.exists() && game.exists() {
-        discard(stage);
+        settle(stage);
     }
     Ok(moved)
+}
+
+/// Ends a stage whose copy is over. When something in it did not go into place (its target
+/// already existed), the stage is kept as `.carry-over-kept-<UTC time>` beside it, with one line
+/// saying where; only a stage with nothing left in it is removed.
+fn settle(stage: &Path) {
+    let left: Vec<&str> = ["launcher", "game"]
+        .into_iter()
+        .filter(|part| stage.join(part).is_dir())
+        .collect();
+    if left.is_empty() {
+        return discard(stage);
+    }
+    let kept = stage.with_file_name(format!(
+        ".carry-over-kept-{}",
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    ));
+    match fs::rename(stage, &kept) {
+        Ok(()) => eprintln!(
+            "Kept {} ({}): the data folder it was copied for already existed, so it was not replaced.",
+            kept.display(),
+            left.join(", ")
+        ),
+        Err(error) => eprintln!("Could not keep {}: {error}", stage.display()),
+    }
 }
 
 /// Removes the stage of a finished copy. A failure is reported and leaves it for the next start.
@@ -297,6 +322,53 @@ mod tests {
         assert!(launcher.join("accounts.json").is_file());
         assert!(!stage.exists());
         assert_eq!(carry_over(&data, &config), Ok(false));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// The `.carry-over-kept-*` folders beside the data folders.
+    fn kept(data: &Path) -> Vec<PathBuf> {
+        let beside = crate::identity::launcher_folder_in(data);
+        fs::read_dir(beside.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with(".carry-over-kept-"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_part_that_was_skipped_is_kept_not_deleted() {
+        let (data, config, base) = scratch("kept");
+        let (stage, launcher, game) = finished_stage(&data);
+        // One part is placed (the launcher's), one skipped (the game folder exists).
+        fs::create_dir_all(game.join("saves")).unwrap();
+        fs::write(game.join("saves/mine.dat"), [9]).unwrap();
+        assert_eq!(carry_over(&data, &config), Ok(true));
+        assert!(launcher.join("accounts.json").is_file());
+        assert!(!stage.exists());
+        let kept = kept(&data);
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(
+            fs::read(kept[0].join("game/saves/World/level.dat")).unwrap(),
+            [1, 2, 3]
+        );
+        assert!(
+            !kept[0].join("launcher").exists(),
+            "the placed part is not kept"
+        );
+        assert_eq!(fs::read(game.join("saves/mine.dat")).unwrap(), [9]);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_stage_with_everything_in_place_is_removed_and_nothing_is_kept() {
+        let (data, config, base) = scratch("nothing-kept");
+        let (stage, launcher, _game) = finished_stage(&data);
+        fs::rename(stage.join("launcher"), &launcher).unwrap();
+        assert_eq!(carry_over(&data, &config), Ok(true));
+        assert!(!stage.exists() && kept(&data).is_empty());
         let _ = fs::remove_dir_all(&base);
     }
 
