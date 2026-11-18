@@ -164,6 +164,16 @@ fn windows_game_words_are_escaped_for_cmd_after_a_pre_launch_command() {
         line(&[r"C:\Program Files (x86)\game.exe"]),
         r#""C:\Program Files (x86)\game.exe""#
     );
+    // `^!` keeps `!VAR!` as it is only with delayed expansion off, which the registry can turn on.
+    #[cfg(windows)]
+    {
+        let cmd = wrap(Command::new("game.exe"), &launch);
+        let args = cmd.get_args().collect::<Vec<_>>();
+        assert!(
+            args[0].to_string_lossy().starts_with("/D /V:OFF /S /C \""),
+            "{args:?}"
+        );
+    }
     // Without cmd the words are passed on as they are.
     let words = os(&["game.exe", "--server", "a&calc"]);
     assert_eq!(

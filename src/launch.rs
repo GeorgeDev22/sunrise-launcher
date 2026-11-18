@@ -10,7 +10,7 @@
 //!   The pre-launch command is the player's own shell line, run in the instance's folder; the
 //!   game's words go through `"$@"`, so they are never parsed by the shell. `exec` makes the
 //!   shell become the wrapper (or the game).
-//! - Windows: `cmd /D /S /C "<pre-launch> && <wrapper…> <game> <args…>"`, each word quoted.
+//! - Windows: `cmd /D /V:OFF /S /C "<pre-launch> && <wrapper…> <game> <args…>"`, each word quoted.
 //!
 //! Without a pre-launch command the wrapper is the program itself, and no shell runs.
 use crate::backend::split_args;
@@ -435,7 +435,7 @@ pub enum Plan {
         script: String,
         words: Vec<OsString>,
     },
-    /// `cmd /D /S /C "<line>"`: the line as cmd reads it.
+    /// `cmd /D /V:OFF /S /C "<line>"`: the line as cmd reads it.
     Cmd { line: String },
 }
 
@@ -500,13 +500,15 @@ pub fn wrap(mut cmd: Command, launch: &Launch) -> Command {
         }
         Plan::Cmd { line } => {
             let mut c = Command::new("cmd.exe");
+            // `/V:OFF`: `cmd_escape`'s `^!` holds only with delayed expansion off, and the
+            // `DelayedExpansion` registry value can turn it on.
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
-                c.raw_arg(format!("/D /S /C \"{line}\""));
+                c.raw_arg(format!("/D /V:OFF /S /C \"{line}\""));
             }
             #[cfg(not(windows))]
-            c.args(["/D", "/S", "/C", &line]);
+            c.args(["/D", "/V:OFF", "/S", "/C", &line]);
             c
         }
     };
