@@ -86,7 +86,7 @@ fn connecting_host(text: &str) -> String {
         match comma {
             Some(comma) => {
                 let host = &after[..comma];
-                out.push_str(if host.starts_with('<') { host } else { PRIVATE });
+                out.push_str(if host == IP || host == PRIVATE { host } else { PRIVATE });
                 rest = &after[comma..];
             }
             None => rest = after,
@@ -334,6 +334,11 @@ mod tests {
         assert_eq!(
             s.scrub("Connecting to 203.0.113.7, 25565"),
             "Connecting to <ip>, 25565"
+        );
+        // Only a whole placeholder stays: a host that merely starts with one is still private.
+        assert_eq!(
+            s.scrub("Connecting to <ip>secret.example, 25565"),
+            "Connecting to <private>, 25565"
         );
         // The loopback short form is no address the IPv6 rule knows, so the host rule hides it.
         assert_eq!(
