@@ -160,6 +160,9 @@ impl Modpack {
     /// that were there are put back and what the import created is removed.
     pub fn extract_overrides(path: &Path, home: &Path) -> Result<Vec<PathBuf>, String> {
         let pack = Modpack::read(path)?;
+        if pack.overrides.is_empty() {
+            return Ok(Vec::new());
+        }
         // Every destination first: refusing one after an earlier override was written would lose
         // the file that override replaced.
         for name in &pack.overrides {
@@ -190,9 +193,19 @@ impl Modpack {
             .map_or(0, |d| d.as_nanos());
         let stage = home.join(format!(".sunrise-spack-{}-{nanos}", std::process::id()));
         std::fs::create_dir(&stage).map_err(|e| format!("{}: {e}", stage.display()))?;
-        let result = Self::stage_and_commit(zip, names, home, &stage, created);
-        let _ = std::fs::remove_dir_all(&stage);
-        result
+        // Each target with the original it replaced, so a failure can undo it.
+        let mut placed = Vec::new();
+        let result = Self::stage_and_commit(zip, names, home, &stage, created, &mut placed);
+        let Err(e) = result else {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Ok(placed.into_iter().map(|(target, _)| target).collect());
+        };
+        let (failed, kept) = undo(&placed);
+        // An original that could not be put back now lives only in its backup in the stage.
+        if !kept {
+            let _ = std::fs::remove_dir_all(&stage);
+        }
+        Err(format!("{e}{failed}"))
     }
 
     fn stage_and_commit(
@@ -201,7 +214,8 @@ impl Modpack {
         home: &Path,
         stage: &Path,
         created: &mut Vec<PathBuf>,
-    ) -> Result<Vec<PathBuf>, String> {
+        placed: &mut Vec<(PathBuf, Option<PathBuf>)>,
+    ) -> Result<(), String> {
         let mut total = 0u64;
         for (i, name) in names.iter().enumerate() {
             // A zip's declared sizes are the pack's own claim, so the limits
@@ -210,33 +224,17 @@ impl Modpack {
         }
         let backups = stage.join("backup");
         std::fs::create_dir(&backups).map_err(|e| format!("{}: {e}", backups.display()))?;
-        // Each target with the original it replaced, so a failure can undo it.
-        let mut placed: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
         for (i, name) in names.iter().enumerate() {
-            let step = Self::place_one(
+            Self::place_one(
                 home,
                 name,
                 &stage.join(i.to_string()),
                 &backups.join(i.to_string()),
                 created,
-                &mut placed,
-            );
-            if let Err(e) = step {
-                for (target, backup) in placed.iter().rev() {
-                    match backup {
-                        // The original is a copy: renaming it over the target puts it back in one step.
-                        Some(backup) => {
-                            let _ = std::fs::rename(backup, target);
-                        }
-                        None => {
-                            let _ = std::fs::remove_file(target);
-                        }
-                    }
-                }
-                return Err(e);
-            }
+                placed,
+            )?;
         }
-        Ok(placed.into_iter().map(|(target, _)| target).collect())
+        Ok(())
     }
 
     fn stage_one(
@@ -279,6 +277,10 @@ impl Modpack {
             Ok(meta) if meta.is_dir() => {
                 return Err(format!("{}: is a folder", target.display()));
             }
+            // A link (or any other entry that is not a plain file) could not be put back as it was.
+            Ok(meta) if !meta.is_file() => {
+                return Err(format!("{}: is a link, not a plain file", target.display()));
+            }
             Ok(_) => {
                 // Copy, not move: the original stays at `target` until the rename below replaces it
                 // in one step, so a crash in between never leaves the file missing.
@@ -288,9 +290,31 @@ impl Modpack {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(format!("{}: {e}", target.display())),
         };
-        placed.push((target.clone(), kept));
-        std::fs::rename(staged, &target).map_err(|e| format!("{}: {e}", target.display()))
+        std::fs::rename(staged, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+        placed.push((target, kept));
+        Ok(())
     }
+}
+
+/// Puts back what `placed` replaced, newest first. Returns a note naming each step that failed, and
+/// whether an original was left in its backup.
+fn undo(placed: &[(PathBuf, Option<PathBuf>)]) -> (String, bool) {
+    let (mut failed, mut kept) = (String::new(), false);
+    for (target, backup) in placed.iter().rev() {
+        let step = match backup {
+            // The original is a copy: renaming it over the target puts it back in one step.
+            Some(backup) => std::fs::rename(backup, target),
+            None => std::fs::remove_file(target),
+        };
+        if let Err(e) = step {
+            failed += &format!("; could not undo {}: {e}", target.display());
+            if let Some(backup) = backup {
+                kept = true;
+                failed += &format!(" (the original is kept at {})", backup.display());
+            }
+        }
+    }
+    (failed, kept)
 }
 
 /// Creates `dir` and the missing folders above it, noting each one made.
@@ -540,6 +564,46 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
             assert!(made.status.success(), "mklink /J failed: {made:?}");
             Ok(())
         });
+    }
+
+    #[test]
+    fn an_original_that_cannot_be_put_back_is_kept_and_reported() {
+        let dir = scratch("undo");
+        let (target, backup) = (dir.join("options.txt"), dir.join("backup"));
+        std::fs::write(&backup, b"mine\n").unwrap();
+        // A folder that is not empty where the original goes back: no rename can replace it.
+        std::fs::create_dir_all(target.join("in the way")).unwrap();
+        let (note, kept) = undo(&[(target.clone(), Some(backup.clone()))]);
+        assert!(kept, "the backup was not kept");
+        assert!(note.contains(&target.display().to_string()), "{note}");
+        assert!(note.contains(&backup.display().to_string()), "{note}");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"mine\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_linked_destination_is_refused_and_left_a_link() {
+        let dir = scratch("linked");
+        let (home, outside) = (dir.join("home"), dir.join("outside.txt"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(&outside, b"shared\n").unwrap();
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside, home.join("options.txt"));
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(&outside, home.join("options.txt"));
+        if let Err(e) = linked {
+            eprintln!("skipped: cannot create a symlink here ({e})");
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        }
+        let path = write_pack(&dir, PACK, &[("overrides/options.txt", b"from the pack\n")]);
+        assert!(Modpack::extract_overrides(&path, &home).is_err());
+        assert_eq!(
+            std::fs::read_link(home.join("options.txt")).unwrap(),
+            outside
+        );
+        assert_eq!(std::fs::read(&outside).unwrap(), b"shared\n");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
