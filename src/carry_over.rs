@@ -19,6 +19,9 @@ const LAUNCHER_STATE: [&str; 7] = [
     "servers",
 ];
 
+/// The file that says the stage holds the whole copy, written before the first rename.
+const COMPLETE: &str = "complete";
+
 /// Runs [`carry_over`] on the player's folders before anything reads them, unless a home
 /// override or a moved Sunrise location decides where the data is. A failure is reported and
 /// leaves the launcher to start empty: the earlier launcher's data is untouched either way.
@@ -52,6 +55,11 @@ pub fn carry_over(data: &Path, config: &Path) -> Result<bool, String> {
     let game = crate::identity::game_folder_in(data);
     let stage = launcher.with_file_name(".carry-over");
     if launcher.exists() || game.exists() {
+        // A copy that was finished but stopped between its two renames: the one folder that is
+        // still in the stage goes where the game reads it.
+        if stage.join(COMPLETE).is_file() {
+            return resume(&stage, &launcher, &game);
+        }
         // A copy that reached both targets but could not remove its stage (a file appearing in
         // it mid-delete) left it beside them; nothing reads it, so it goes on a later start.
         if launcher.exists() && game.exists() && stage.exists() {
@@ -92,10 +100,31 @@ pub fn carry_over(data: &Path, config: &Path) -> Result<bool, String> {
         build: launcher.clone(),
     };
     crate::relocation::prepare_paths(&staged, &source, &target)?;
+    // From here the stage holds the whole copy: a start that finds it with one target in place
+    // finishes the renames (`resume`) instead of leaving the other folder in it.
+    fs::write(stage.join(COMPLETE), b"").map_err(|e| format!("{}: {e}", stage.display()))?;
     fs::rename(&staged.launcher, &launcher).map_err(|e| format!("{}: {e}", launcher.display()))?;
     fs::rename(&staged.game, &game).map_err(|e| format!("{}: {e}", game.display()))?;
     discard(&stage);
     Ok(true)
+}
+
+/// Finishes a copy that stopped between its two renames: each folder still in the stage whose
+/// target does not exist is renamed into place. A target that exists is never replaced, so saves
+/// already there stay as they are, and what is left in the stage is removed once both are there.
+fn resume(stage: &Path, launcher: &Path, game: &Path) -> Result<bool, String> {
+    let mut moved = false;
+    for (part, target) in [("launcher", launcher), ("game", game)] {
+        let from = stage.join(part);
+        if !target.exists() && from.is_dir() {
+            fs::rename(&from, target).map_err(|e| format!("{}: {e}", target.display()))?;
+            moved = true;
+        }
+    }
+    if launcher.exists() && game.exists() {
+        discard(stage);
+    }
+    Ok(moved)
 }
 
 /// Removes the stage of a finished copy. A failure is reported and leaves it for the next start.
@@ -215,6 +244,94 @@ mod tests {
             fs::read(game.join("saves/World/level.dat")).unwrap(),
             [1, 2, 3]
         );
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A finished stage (marker, launcher and game folders) beside `data`, with no target yet.
+    fn finished_stage(data: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let launcher = crate::identity::launcher_folder_in(data);
+        let game = crate::identity::game_folder_in(data);
+        let stage = launcher.with_file_name(".carry-over");
+        fs::create_dir_all(stage.join("launcher")).unwrap();
+        fs::write(stage.join("launcher/accounts.json"), "{}").unwrap();
+        fs::create_dir_all(stage.join("game/saves/World")).unwrap();
+        fs::write(stage.join("game/saves/World/level.dat"), [1, 2, 3]).unwrap();
+        fs::write(stage.join(COMPLETE), b"").unwrap();
+        (stage, launcher, game)
+    }
+
+    fn scratch(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!("hz-carry-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        (base.join("data"), base.join("config"), base)
+    }
+
+    #[test]
+    fn a_copy_stopped_between_its_renames_is_finished_on_the_next_start() {
+        let (data, config, base) = scratch("resume");
+        let (stage, launcher, game) = finished_stage(&data);
+        // The second rename failed: the launcher folder is in place, the saves still staged.
+        fs::rename(stage.join("launcher"), &launcher).unwrap();
+        assert_eq!(carry_over(&data, &config), Ok(true));
+        assert_eq!(
+            fs::read(game.join("saves/World/level.dat")).unwrap(),
+            [1, 2, 3]
+        );
+        assert!(launcher.join("accounts.json").is_file());
+        assert!(!stage.exists());
+        assert_eq!(carry_over(&data, &config), Ok(false));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_copy_stopped_before_either_rename_copies_again_and_the_saves_end_in_place() {
+        let Some(&(old_launcher, old_game, _)) = crate::identity::EARLIER.first() else {
+            return;
+        };
+        let (data, config, base) = scratch("again");
+        let (stage, launcher, game) = finished_stage(&data);
+        // The first rename failed: nothing is in place, the stage is complete.
+        let from_game = data.join(old_game);
+        fs::create_dir_all(from_game.join("saves/World")).unwrap();
+        fs::write(from_game.join("saves/World/level.dat"), [4, 5]).unwrap();
+        fs::create_dir_all(data.join(old_launcher)).unwrap();
+        assert_eq!(carry_over(&data, &config), Ok(true));
+        assert_eq!(
+            fs::read(game.join("saves/World/level.dat")).unwrap(),
+            [4, 5]
+        );
+        assert!(launcher.is_dir() && !stage.exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn finishing_never_replaces_a_target_that_has_saves() {
+        let (data, config, base) = scratch("keep");
+        let (stage, launcher, game) = finished_stage(&data);
+        // The game folder is already there with the player's own saves; the launcher's is not.
+        fs::create_dir_all(game.join("saves")).unwrap();
+        fs::write(game.join("saves/mine.dat"), [9]).unwrap();
+        assert_eq!(carry_over(&data, &config), Ok(true));
+        assert_eq!(fs::read(game.join("saves/mine.dat")).unwrap(), [9]);
+        assert!(
+            !game.join("saves/World").exists(),
+            "the staged saves did not replace them"
+        );
+        assert!(launcher.join("accounts.json").is_file());
+        assert!(!stage.exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_stage_that_is_not_marked_complete_is_never_moved_into_place() {
+        let (data, config, base) = scratch("partial");
+        let (stage, launcher, game) = finished_stage(&data);
+        fs::remove_file(stage.join(COMPLETE)).unwrap();
+        // A copy that failed part way, after which the launcher started empty.
+        fs::create_dir_all(&launcher).unwrap();
+        assert_eq!(carry_over(&data, &config), Ok(false));
+        assert!(!game.exists());
+        assert!(stage.join("game/saves/World/level.dat").is_file());
         let _ = fs::remove_dir_all(&base);
     }
 
