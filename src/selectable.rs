@@ -310,6 +310,14 @@ impl Element for Selectable {
     ) -> Hitbox {
         self.text
             .prepaint(id, inspector_id, bounds, state, window, cx);
+        // The block the selection started in holds the keyboard, for Ctrl/Cmd-C and -A. GPUI
+        // takes a focus handle only while prepainting.
+        let anchored = id.is_some_and(|id| {
+            ACTIVE.with_borrow(|a| a.as_ref().is_some_and(|a| a.anchor.block == *id))
+        });
+        if anchored {
+            window.set_focus_handle(&focus(cx), cx);
+        }
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
@@ -357,8 +365,6 @@ impl Element for Selectable {
             });
         }
         if anchor_here {
-            let handle = focus(cx);
-            window.set_focus_handle(&handle, cx);
             let whole = text.len();
             window.on_key_event(move |ev: &KeyDownEvent, phase, _, cx| {
                 if phase != DispatchPhase::Bubble || !ev.keystroke.modifiers.secondary(cx) {
