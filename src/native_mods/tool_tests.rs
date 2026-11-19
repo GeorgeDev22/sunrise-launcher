@@ -106,6 +106,18 @@ fn a_tool_run_reports_its_mods_asks_consent_and_ends_built_or_blamed() {
 }
 
 #[test]
+fn crates_that_run_nothing_while_building_are_not_asked_about() {
+    let question = |scripts: &[&str], macros: &[&str]| Consent {
+        added_crates: 3,
+        build_scripts: scripts.iter().map(|s| s.to_string()).collect(),
+        proc_macros: macros.iter().map(|s| s.to_string()).collect(),
+    };
+    assert!(question(&[], &[]).runs_nothing_at_build());
+    assert!(!question(&["syn"], &[]).runs_nothing_at_build());
+    assert!(!question(&[], &["serde_derive"]).runs_nothing_at_build());
+}
+
+#[test]
 fn only_the_last_error_lines_are_kept_read_lossily() {
     let kept = tail(b"first\n\xff second\r\n".as_slice());
     assert_eq!(kept, "first\n\u{fffd} second");
