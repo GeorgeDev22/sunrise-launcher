@@ -22,6 +22,9 @@ pub const OPTIFINE_DONATE: &str = "https://optifine.net/donate";
 /// The most a cape picture may weigh: real ones are a few kilobytes.
 const MAX_PICTURE: u64 = 256 * 1024;
 
+/// A cape's outer face as [`front`] cuts it: texels row by row as RGBA, width, height.
+pub type Face = (Vec<[u8; 4]>, usize, usize);
+
 /// One cape the account owns.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cape {
@@ -175,7 +178,7 @@ fn read_picture(reader: impl Read) -> Option<Vec<u8>> {
 /// the 64 by 32 layout (at 1, 1), or that many times 2ⁿ for a bigger picture. OptiFine's 46 by 22
 /// pictures and the old 22 by 17 ones keep the face where the 64 by 32 layout has it; a picture is
 /// laid out on the smallest such canvas it fits, as OptiFine does.
-pub fn front(png: &[u8]) -> Option<(Vec<[u8; 4]>, usize, usize)> {
+pub fn front(png: &[u8]) -> Option<Face> {
     let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
         .ok()?
         .to_rgba8();

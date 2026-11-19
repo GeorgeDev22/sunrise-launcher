@@ -52,6 +52,10 @@ impl Launcher {
                 Msg::AccountHead(uuid, url, face, failed) => {
                     self.profile_heads.loaded(&uuid, &url, face, failed)
                 }
+                Msg::Capes(uuid, asked, result) => self.capes_answered(uuid, asked, result),
+                Msg::CapePicture(url, face) => self.skins.picture(url, face),
+                Msg::OptifineCape(name, found) => self.skins.optifine_cape(&name, found),
+                Msg::OptifineEditor(result) => self.optifine_editor_answered(result, cx),
                 Msg::AccountProgress(uuid, generation, phase) => {
                     if self.auth_busy.get(&uuid) == Some(&generation) {
                         self.auth_progress.insert(uuid, phase);

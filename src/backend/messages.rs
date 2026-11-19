@@ -32,6 +32,18 @@ pub enum Msg {
     AccountProgress(String, u64, crate::account::session::Phase),
     AccountHead(String, Option<String>, Option<Vec<[u8; 4]>>, bool),
     AccountRemoved(String, u64, Result<bool, String>),
+    /// The capes account `.0` owns, from the request numbered `.1` (a listing or a change).
+    Capes(
+        String,
+        u64,
+        Result<Vec<crate::account::capes::Cape>, String>,
+    ),
+    /// A Minecraft cape's picture (by its URL): its outer face as `capes::front` cuts it.
+    CapePicture(String, Option<crate::account::capes::Face>),
+    /// The OptiFine cape of a name: its outer face, none, or why it couldn't be had.
+    OptifineCape(String, Result<Option<crate::account::capes::Face>, String>),
+    /// OptiFine's cape editor's address after the session join, or why it can't open.
+    OptifineEditor(Result<String, String>),
     /// The owner gate's answer for the game about to start: the selected account's session
     /// file (none = offline) and why it plays offline, if it does.
     Session(Result<Option<crate::account::GameSession>, crate::account::NoOwner>),
