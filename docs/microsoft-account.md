@@ -337,7 +337,7 @@ it changed.
   the page is saved in `saved-skins/<account uuid>/`, each account's apart (with `index.json` for names and arm models), its arms
   guessed from its clear arm column. A skin's id is the first 16 hex digits of the SHA-1 of its
   texels (clear ones alike), not of its file, since the texture server sends a worn skin back in
-  another PNG. The skin worn is kept there too ("Skin from <day>", with the arms it is worn
+  another PNG. The skin worn is kept there too (without a name, with the arms it is worn
   with), so every skin replaced by a Save stays in the list, worn one first, then newest first.
 - **Owned capes**: `GET /minecraft/profile` lists them, each `ACTIVE` or `INACTIVE`, with its id,
   name (`alias`) and picture. Only pictures under `textures.minecraft.net/texture/` are fetched, as

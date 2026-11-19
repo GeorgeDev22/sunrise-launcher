@@ -7,8 +7,10 @@ use std::path::{Path, PathBuf};
 /// One saved skin.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Saved {
-    /// The first 16 hex digits of the PNG's SHA-1: the same picture is saved once.
+    /// The first 16 hex digits of the SHA-1 of its texels ([`id_of`]): the same skin is saved once.
     pub id: String,
+    /// What its tile is called: the file it came from, or nothing for a skin kept because it was
+    /// worn.
     pub name: String,
     pub slim: bool,
 }
@@ -82,7 +84,7 @@ pub fn add(dir: &Path, png: &[u8], name: &str, slim: Option<bool>) -> Result<Sav
     let name: String = name.trim().chars().take(40).collect();
     let saved = Saved {
         id,
-        name: if name.is_empty() { "Skin".into() } else { name },
+        name,
         slim: slim.unwrap_or_else(|| crate::player_model::looks_slim(&skin)),
     };
     all.push(saved.clone());
@@ -161,7 +163,7 @@ mod tests {
         assert_eq!((first.name.as_str(), first.slim), ("Knight", false));
         let slim = add(&dir, &picture(64, 64, true), "", None).unwrap();
         assert!(slim.slim, "the clear arm column says slim");
-        assert_eq!(slim.name, "Skin");
+        assert_eq!(slim.name, "", "a skin kept without a name has none");
         assert_eq!(
             add(&dir, &picture(64, 64, false), "Again", None).unwrap(),
             first

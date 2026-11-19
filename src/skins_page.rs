@@ -317,8 +317,7 @@ impl Launcher {
         self.remember_worn();
     }
 
-    /// Keeps the skin worn now among the saved skins (once: the same skin is saved once), named
-    /// for the day it was first seen worn.
+    /// Keeps the skin worn now among the saved skins (once: the same skin is saved once).
     fn remember_worn(&mut self) {
         let Some(account) = self.look_account() else {
             return;
@@ -338,9 +337,8 @@ impl Launcher {
             return;
         };
         let dir = skin_library::folder(&account.uuid);
-        let day = chrono::Local::now().format("%b %-d").to_string();
-        let name = trf("Skin from {date}", &[("date", &day)]);
-        match skin_library::add(&dir, png, &name, Some(model == "slim")) {
+        // Kept without a name: its tile shows the skin alone.
+        match skin_library::add(&dir, png, "", Some(model == "slim")) {
             Ok(saved) => {
                 // The choice made before it was kept means the same skin under its saved name.
                 if self
