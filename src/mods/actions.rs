@@ -120,14 +120,12 @@ impl Launcher {
 
     /// One mod on or off. On: the existing switch, with its native-permission and taken-down
     /// checks. Off: like any change that could take content out of a world, after the worlds
-    /// check.
+    /// check. A local or GitHub file switches the same way; its native code still asks for
+    /// permission before it is built.
     pub(super) fn toggle(&mut self, row: &Row) {
-        if row.local.is_some() || !self.guard() {
+        if !self.guard() {
             return;
         }
-        let Some(entry) = row.entry.clone() else {
-            return;
-        };
         if row.on {
             self.run(
                 Action::TurnOff(vec![(row.id.clone(), row.title.clone())]),
@@ -135,10 +133,43 @@ impl Launcher {
             );
             return;
         }
+        if let Some(local) = &row.local {
+            self.turn_on_local(row, local.native);
+            return;
+        }
+        let Some(entry) = row.entry.clone() else {
+            return;
+        };
         self.mods.message = None;
         self.mods_switch(&entry);
         if let Some(Err(e)) = self.mods.message.take() {
             self.ui.mods.notice = Some(Err(e));
+        }
+    }
+
+    /// Turns on a mod the browser didn't install. Native code with no permission yet is turned
+    /// on and then asked about, as at Play: Decline turns it off again.
+    fn turn_on_local(&mut self, row: &Row, native: bool) {
+        self.mods.message = None;
+        let home = self.mods.home();
+        let Some(_lock) = sunrise_launcher::browser::try_lock_home(&home) else {
+            self.ui.mods.notice = Some(Err(
+                tr("Wait for the current operation to finish.").to_string()
+            ));
+            return;
+        };
+        match mod_list::set_enabled(&home, &row.id, true) {
+            Err(e) => self.ui.mods.notice = Some(Err(e)),
+            Ok(()) if native && self.settings.native_mods_allowed_at.is_none() => {
+                self.ui.mods.notice = None;
+                self.request_native_build_consent();
+            }
+            Ok(()) => {
+                self.ui.mods.notice = Some(Ok(trf(
+                    "{mod} is on. The game reads this when it starts.",
+                    &[("mod", &row.title)],
+                )))
+            }
         }
     }
 

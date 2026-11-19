@@ -536,8 +536,8 @@ impl Launcher {
         if let Some(local) = &r.local {
             notes.push(say(
                 match local.github {
-                    true => tr("From GitHub, not the registry: read-only here").to_string(),
-                    false => tr("A local file, not from the registry: read-only here").to_string(),
+                    true => tr("From GitHub, not the registry: no updates here").to_string(),
+                    false => tr("A local file, not from the registry: no updates here").to_string(),
                 },
                 0x9a948a,
             ));
@@ -601,7 +601,7 @@ impl Launcher {
         }
         let sw = {
             let s = ui::switch(("alt-row-switch", n), r.on);
-            if r.local.is_none() && !matches!(r.need, Some(Need::TakenDown(_))) {
+            if !matches!(r.need, Some(Need::TakenDown(_))) {
                 let row = r.clone();
                 s.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.toggle(&row);

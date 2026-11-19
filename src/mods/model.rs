@@ -384,7 +384,7 @@ pub(super) struct Row {
     pub(super) dependency: bool,
     /// The player chose this version (`sunrise::chosen`): a batch leaves it alone.
     pub(super) pinned: bool,
-    /// Not installed by the browser: read-only here.
+    /// Not installed by the browser: it switches on and off, but has no updates or removal here.
     pub(super) local: Option<Local>,
     pub(super) icon: Option<String>,
     pub(super) entry: Option<Entry>,
@@ -487,7 +487,7 @@ pub(super) struct World<'a> {
 }
 
 /// A native `.smod` in the game folder that the registry browser didn't install (a local file or a
-/// GitHub install): where it came from isn't verified, so it is listed and left alone.
+/// GitHub install): where it came from isn't verified, so it is listed and switched, never updated.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Local {
     pub(super) id: String,
