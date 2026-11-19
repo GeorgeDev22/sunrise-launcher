@@ -66,6 +66,7 @@ The opening, then Play ([clip](docs/opening.webm)):
   beside the choices: the skin (the one worn now, saved skins, the game's default skins, or a PNG
   added from a file or dropped on the page), classic or slim arms, and the cape (none, one the
   Minecraft account owns, or the player's OptiFine cape when OptiFine has one under their name).
+  Every skin worn is kept in the list, so one replaced stays there to wear again.
   Choices show on the preview at once; **Save** sends them to the Minecraft services, so every
   launcher and server shows them. Saved skins stay in `saved-skins/` in the data folder. Also
   reached from the account menu (**Skins and capes**) and Ctrl+K.

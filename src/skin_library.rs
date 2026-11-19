@@ -57,19 +57,15 @@ fn save(dir: &Path, list: &[Saved]) -> Result<(), String> {
 }
 
 /// Saves the skin `png` as `name`, its arms as the picture suggests
-/// ([`crate::player_model::looks_slim`]); the one already saved when the same picture is.
-pub fn add(dir: &Path, png: &[u8], name: &str) -> Result<Saved, String> {
-    use sha1::Digest;
+/// ([`crate::player_model::looks_slim`]) unless `slim` says; the one already saved when the same
+/// skin is.
+pub fn add(dir: &Path, png: &[u8], name: &str, slim: Option<bool>) -> Result<Saved, String> {
     if png.len() > crate::account::skins::MAX_SKIN {
         return Err("This picture is too big for a skin.".into());
     }
     let skin = crate::player_model::skin(png)
         .ok_or("This isn't a Minecraft skin: it must be a 64×64 or 64×32 PNG.")?;
-    let id: String = sha1::Sha1::digest(png)
-        .iter()
-        .take(8)
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let id = id_of(&skin);
     let mut all = list(dir);
     if let Some(known) = all.iter().find(|s| s.id == id) {
         return Ok(known.clone());
@@ -80,11 +76,34 @@ pub fn add(dir: &Path, png: &[u8], name: &str) -> Result<Saved, String> {
     let saved = Saved {
         id,
         name: if name.is_empty() { "Skin".into() } else { name },
-        slim: crate::player_model::looks_slim(&skin),
+        slim: slim.unwrap_or_else(|| crate::player_model::looks_slim(&skin)),
     };
     all.push(saved.clone());
     save(dir, &all)?;
     Ok(saved)
+}
+
+/// A skin's id: the first 16 hex digits of the SHA-1 of its texels, the clear ones all alike. The
+/// texels, not the file: Mojang's texture server sends a skin back in another PNG than the one
+/// worn, and it must still be the same saved skin.
+pub fn id_of(skin: &crate::player_model::Texture) -> String {
+    use sha1::Digest;
+    let mut sha = sha1::Sha1::new();
+    sha.update((skin.w as u32).to_le_bytes());
+    for t in &skin.texels {
+        sha.update(if t[3] == 0 { [0; 4] } else { *t });
+    }
+    sha.finalize()
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The saved skin whose texels `png` has, if one has.
+pub fn find(dir: &Path, png: &[u8]) -> Option<Saved> {
+    let id = id_of(&crate::player_model::skin(png)?);
+    list(dir).into_iter().find(|s| s.id == id)
 }
 
 /// Gives the saved skin `id` slim or classic arms.
@@ -131,12 +150,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path().join("saved-skins");
         assert!(list(&dir).is_empty());
-        let first = add(&dir, &picture(64, 64, false), "  Knight  ").unwrap();
+        let first = add(&dir, &picture(64, 64, false), "  Knight  ", None).unwrap();
         assert_eq!((first.name.as_str(), first.slim), ("Knight", false));
-        let slim = add(&dir, &picture(64, 64, true), "").unwrap();
+        let slim = add(&dir, &picture(64, 64, true), "", None).unwrap();
         assert!(slim.slim, "the clear arm column says slim");
         assert_eq!(slim.name, "Skin");
-        assert_eq!(add(&dir, &picture(64, 64, false), "Again").unwrap(), first);
+        assert_eq!(
+            add(&dir, &picture(64, 64, false), "Again", None).unwrap(),
+            first
+        );
         assert_eq!(list(&dir), [first.clone(), slim.clone()]);
         assert_eq!(png(&dir, &first.id), Some(picture(64, 64, false)));
         set_slim(&dir, &first.id, true).unwrap();
@@ -149,10 +171,37 @@ mod tests {
     #[test]
     fn only_skins_are_saved_and_odd_ids_never_reach_the_disk() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(add(dir.path(), &picture(46, 22, false), "Cape").is_err());
-        assert!(add(dir.path(), b"text", "Text").is_err());
+        assert!(add(dir.path(), &picture(46, 22, false), "Cape", None).is_err());
+        assert!(add(dir.path(), b"text", "Text", None).is_err());
         assert!(png(dir.path(), "../../etc/passwd").is_none());
         assert!(remove(dir.path(), "../x").is_ok());
         assert!(list(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn the_same_skin_in_another_png_is_the_same_saved_skin() {
+        let dir = tempfile::tempdir().unwrap();
+        let worn = add(dir.path(), &picture(64, 64, true), "Worn", Some(false)).unwrap();
+        assert!(
+            !worn.slim,
+            "the arms the account wears it with win over the guess"
+        );
+        // The texture server's copy: other PNG bytes, other colours under the clear texels.
+        let image = image::RgbaImage::from_fn(64, 64, |x, y| {
+            let clear = x == 54 && (20..32).contains(&y);
+            image::Rgba(if clear {
+                [99, 1, 2, 0]
+            } else {
+                [x as u8, y as u8, 3, 255]
+            })
+        });
+        let mut copy = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut copy, image::ImageFormat::Png).unwrap();
+        let copy = copy.into_inner();
+        assert_ne!(copy, picture(64, 64, true));
+        assert_eq!(find(dir.path(), &copy), Some(worn.clone()));
+        assert_eq!(add(dir.path(), &copy, "Again", None).unwrap(), worn);
+        assert_eq!(list(dir.path()).len(), 1);
+        assert!(find(dir.path(), &picture(64, 64, false)).is_none());
     }
 }

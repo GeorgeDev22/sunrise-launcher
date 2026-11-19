@@ -71,6 +71,9 @@ pub(crate) struct Skins {
     /// The name the OptiFine cape was asked for, and its picture once the answer is in.
     optifine: Option<(String, Option<Option<Vec<u8>>>)>,
     saved: Vec<Saved>,
+    /// The worn skin's URL and the saved skin that keeps it: every skin worn is kept, so one
+    /// replaced by a Save stays in the list to wear again.
+    worn_saved: Option<(String, String)>,
     /// The choices not saved yet; none: what the account wears.
     chosen: Option<Look>,
     /// A Save under way.
@@ -301,10 +304,62 @@ impl Launcher {
             None if self.skins.optifine_png(&account.name).is_some() => CapePick::Optifine,
             None => CapePick::None,
         };
-        Look {
-            skin: SkinPick::Worn,
-            slim,
-            cape,
+        let skin = match (&account.skin, &self.skins.worn_saved) {
+            (Some((url, _)), Some((kept, id))) if url == kept => SkinPick::Saved(id.clone()),
+            _ => SkinPick::Worn,
+        };
+        Look { skin, slim, cape }
+    }
+
+    /// A picture from the texture server arrived (`Msg::Picture`).
+    pub(crate) fn skins_picture(&mut self, url: String, png: Option<Vec<u8>>) {
+        self.skins.picture(url, png);
+        self.remember_worn();
+    }
+
+    /// Keeps the skin worn now among the saved skins (once: the same skin is saved once), named
+    /// for the day it was first seen worn.
+    fn remember_worn(&mut self) {
+        let Some(account) = self.look_account() else {
+            return;
+        };
+        let Some((url, model)) = &account.skin else {
+            return;
+        };
+        if self
+            .skins
+            .worn_saved
+            .as_ref()
+            .is_some_and(|(kept, _)| kept == url)
+        {
+            return;
+        }
+        let Some(Some(png)) = self.skins.pictures.get(url) else {
+            return;
+        };
+        let dir = skin_library::folder();
+        let day = chrono::Local::now().format("%b %-d").to_string();
+        let name = trf("Skin from {date}", &[("date", &day)]);
+        match skin_library::add(&dir, png, &name, Some(model == "slim")) {
+            Ok(saved) => {
+                // The choice made before it was kept means the same skin under its saved name.
+                if self
+                    .skins
+                    .chosen
+                    .as_ref()
+                    .is_some_and(|c| c.skin == SkinPick::Worn)
+                {
+                    if let Some(chosen) = &mut self.skins.chosen {
+                        chosen.skin = SkinPick::Saved(saved.id.clone());
+                    }
+                }
+                self.skins.worn_saved = Some((url.clone(), saved.id));
+                self.skins.saved = skin_library::list(&dir);
+                if self.skins.chosen == Some(self.worn_look(&account)) {
+                    self.skins.chosen = None;
+                }
+            }
+            Err(e) => eprintln!("Sunrise: the skin worn now couldn't be kept: {e}"),
         }
     }
 
@@ -504,6 +559,7 @@ impl Launcher {
             });
         }
         self.skins.chosen = None;
+        self.remember_worn();
         self.skins.said = Some(Ok(tr("Saved. Everyone sees your new look.").into()));
         self.load_profile_heads();
     }
@@ -525,7 +581,7 @@ impl Launcher {
                         std::fs::read(&path).map_err(|e| e.to_string())
                     }
                 })
-                .and_then(|png| skin_library::add(&dir, &png, &name));
+                .and_then(|png| skin_library::add(&dir, &png, &name, None));
             match added {
                 Ok(saved) => {
                     self.skins.saved = skin_library::list(&dir);
@@ -639,6 +695,32 @@ impl Launcher {
                 .child(preview)
                 .child(choices),
         )
+        // A drag begun on the preview turns it wherever the pointer goes on the page.
+        .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+            let Some((from, yaw, pitch)) = this.skins.drag else {
+                return;
+            };
+            if ev.pressed_button != Some(MouseButton::Left) {
+                this.skins.drag = None;
+                cx.notify();
+                return;
+            }
+            let (dx, dy) = (
+                f32::from(ev.position.x - from.x),
+                f32::from(ev.position.y - from.y),
+            );
+            this.skins.yaw = yaw + dx * 0.012;
+            this.skins.pitch = (pitch + dy * 0.008).clamp(-0.5, 0.6);
+            cx.notify();
+        }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                if this.skins.drag.take().is_some() {
+                    cx.notify();
+                }
+            }),
+        )
         // A skin file dropped anywhere on the page is saved and chosen.
         .drag_over::<ExternalPaths>(|s, _, _, _| s.bg(rgb(palette().hover)))
         .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
@@ -721,30 +803,6 @@ impl Launcher {
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseDownEvent, _, cx| {
                     this.skins.drag = Some((ev.position, this.skins.yaw, this.skins.pitch));
-                    cx.notify();
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
-                let Some((from, yaw, pitch)) = this.skins.drag else {
-                    return;
-                };
-                if ev.pressed_button != Some(MouseButton::Left) {
-                    this.skins.drag = None;
-                    cx.notify();
-                    return;
-                }
-                let (dx, dy) = (
-                    f32::from(ev.position.x - from.x),
-                    f32::from(ev.position.y - from.y),
-                );
-                this.skins.yaw = yaw + dx * 0.012;
-                this.skins.pitch = (pitch + dy * 0.008).clamp(-0.5, 0.6);
-                cx.notify();
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.skins.drag = None;
                     cx.notify();
                 }),
             );
@@ -891,9 +949,11 @@ impl Launcher {
                     .text_center()
                     .text_size(px(tokens::SMALL))
                     .font_weight(FontWeight::SEMIBOLD)
+                    // Two lines at most, and always room for two, so the tiles line up.
+                    .h(px(34.))
+                    .line_height(px(17.))
                     .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
+                    .line_clamp(2)
                     .child(label),
             )
             .child(
@@ -960,21 +1020,28 @@ impl Launcher {
                 }
             });
         };
-        tiles = tiles.child(
-            self.tile(
-                "skin-worn".into(),
-                self.skin_thumb(account, &SkinPick::Worn, worn_slim),
-                tr("Your skin").into(),
-                look.skin == SkinPick::Worn,
-                true,
-            )
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                pick(this, SkinPick::Worn, Some(worn_slim));
-                cx.notify();
-            })),
-        );
-        for saved in self.skins.saved.clone() {
+        let worn = self.worn_look(account).skin;
+        if worn == SkinPick::Worn {
+            tiles = tiles.child(
+                self.tile(
+                    "skin-worn".into(),
+                    self.skin_thumb(account, &SkinPick::Worn, worn_slim),
+                    tr("Your skin").into(),
+                    look.skin == SkinPick::Worn,
+                    true,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    pick(this, SkinPick::Worn, Some(worn_slim));
+                    cx.notify();
+                })),
+            );
+        }
+        let mut history = self.skins.saved.clone();
+        history.reverse();
+        history.sort_by_key(|saved| SkinPick::Saved(saved.id.clone()) != worn);
+        for saved in history {
             let skin = SkinPick::Saved(saved.id.clone());
+            let is_worn = skin == worn;
             let id = saved.id.clone();
             let forget = div()
                 .id(SharedString::from(format!("skin-forget-{}", saved.id)))
@@ -1005,9 +1072,10 @@ impl Launcher {
                     self.skin_thumb(account, &skin, slim),
                     saved.name.clone().into(),
                     look.skin == skin,
-                    false,
+                    is_worn,
                 )
-                .child(forget)
+                // The worn skin can't be forgotten: it would be kept again at once.
+                .when(!is_worn, |d| d.child(forget))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     pick(this, skin.clone(), Some(slim));
                     cx.notify();

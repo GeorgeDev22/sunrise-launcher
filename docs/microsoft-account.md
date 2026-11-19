@@ -318,21 +318,27 @@ player renderer. Until a skin arrives the default skin for the UUID shows (as to
 ## Skins and capes in the launcher (Skins tab)
 
 The Skins tab (`src/skins_page.rs`; requests in `src/account/capes.rs` and `src/account/skins.rs`,
-the 3D preview in `src/player_model.rs`, saved skins in `src/skin_library.rs`) shows the account
+the 3D preview drawn by `scenery/src/model.rs` from the pictures `src/player_model.rs` decodes,
+saved skins in `src/skin_library.rs`) shows the account
 that plays, the selected one or else the first, as the game picks it. Choices show on the preview
 at once and are sent only on Save: the skin first when it or its arms changed, then the cape when
 it changed.
 
 - **Preview**: the player model drawn in software (each part a box on the skin's standard
   layout, its outer layer grown a little, the cape swung back from the shoulders), turned by
-  dragging. Old 64×32 skins get their left arm and leg, an opaque base layer and the hat cleared
+  dragging (anywhere on the page once the drag began on it). It is drawn in the scenery crate,
+  which is optimised in debug builds too: unoptimised, one 560×840 frame took 65 ms, about 10 ms
+  optimised. Old 64×32 skins get their left arm and leg, an opaque base layer and the hat cleared
   when it has no clear texel, as the game's `processLegacySkin` does.
 - **Skin**: `POST /minecraft/profile/skins`, a multipart form with `variant` (`classic` or `slim`)
   and `file` (the PNG, at most 256 KiB, 64×64 or 64×32). The choices are the skin worn now, saved
   skins, and the game's nine default skins from the prepared game files
   (`assets/minecraft/textures/entity/player/{wide,slim}`). A PNG added from a file or dropped on
-  the page is saved under the first 16 hex digits of its SHA-1 in `saved-skins/` (with
-  `index.json` for names and arm models), its arms guessed from its clear arm column.
+  the page is saved in `saved-skins/` (with `index.json` for names and arm models), its arms
+  guessed from its clear arm column. A skin's id is the first 16 hex digits of the SHA-1 of its
+  texels (clear ones alike), not of its file, since the texture server sends a worn skin back in
+  another PNG. The skin worn is kept there too ("Skin from <day>", with the arms it is worn
+  with), so every skin replaced by a Save stays in the list, worn one first, then newest first.
 - **Owned capes**: `GET /minecraft/profile` lists them, each `ACTIVE` or `INACTIVE`, with its id,
   name (`alias`) and picture. Only pictures under `textures.minecraft.net/texture/` are fetched, as
   the game does. Wearing one is `PUT /minecraft/profile/capes/active` with `{"capeId": …}`, and no

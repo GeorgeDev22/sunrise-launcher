@@ -53,7 +53,7 @@ impl Launcher {
                     self.profile_heads.loaded(&uuid, &url, face, failed)
                 }
                 Msg::Capes(uuid, asked, result) => self.capes_answered(uuid, asked, result),
-                Msg::Picture(url, png) => self.skins.picture(url, png),
+                Msg::Picture(url, png) => self.skins_picture(url, png),
                 Msg::OptifineCape(name, png) => self.skins.optifine_cape(&name, png),
                 Msg::LookSaved(uuid, asked, result) => self.look_saved(uuid, asked, *result),
                 Msg::AccountProgress(uuid, generation, phase) => {
