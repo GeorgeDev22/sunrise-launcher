@@ -7,23 +7,15 @@
 //!
 //! An OptiFine cape is a picture OptiFine's cape server keeps under the player's name
 //! (`http://s.optifine.net/capes/<name>.png`, plain HTTP: the server has no HTTPS). Only clients
-//! that ask that server show it. Its look is changed on optifine.net, whose editor trusts the
-//! player after a Mojang session join, as OptiFine's own "Open Cape Editor" does.
-use super::{bearer, json, request_to, send, str_field, Account, Body, Endpoints, Value};
+//! that ask that server show it.
+use super::{bearer, json, request_to, send, str_field, Body, Endpoints, Value};
 use std::io::Read;
 use std::time::Duration;
 
-/// Mojang's session server, which OptiFine's cape editor asks whether the player joined.
-pub const SESSION: &str = "https://sessionserver.mojang.com";
 /// OptiFine's cape server.
 pub const OPTIFINE: &str = "http://s.optifine.net";
-/// Where an OptiFine cape is got.
-pub const OPTIFINE_DONATE: &str = "https://optifine.net/donate";
 /// The most a cape picture may weigh: real ones are a few kilobytes.
 const MAX_PICTURE: u64 = 256 * 1024;
-
-/// A cape's outer face as [`front`] cuts it: texels row by row as RGBA, width, height.
-pub type Face = (Vec<[u8; 4]>, usize, usize);
 
 /// One cape the account owns.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -149,7 +141,7 @@ pub fn optifine(base: &str, name: &str) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(bytes))
 }
 
-/// A Minecraft cape's picture from [`is_texture`]'s server; none when it can't be had.
+/// A skin's or cape's picture from [`is_texture`]'s server; none when it can't be had.
 pub fn picture(url: &str) -> Option<Vec<u8>> {
     if !is_texture(url) {
         return None;
@@ -172,67 +164,4 @@ fn read_picture(reader: impl Read) -> Option<Vec<u8>> {
     let fits = bytes.len() as u64 <= MAX_PICTURE;
     (fits && image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).is_ok())
         .then_some(bytes)
-}
-
-/// The cape's outer face, as a player behind it sees it, row by row as RGBA: 10 by 16 texels of
-/// the 64 by 32 layout (at 1, 1), or that many times 2ⁿ for a bigger picture. OptiFine's 46 by 22
-/// pictures and the old 22 by 17 ones keep the face where the 64 by 32 layout has it; a picture is
-/// laid out on the smallest such canvas it fits, as OptiFine does.
-pub fn front(png: &[u8]) -> Option<Face> {
-    let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
-        .ok()?
-        .to_rgba8();
-    let (w, h) = image.dimensions();
-    if w == 0 || h == 0 || w > 2048 || h > 1024 {
-        return None;
-    }
-    let mut k = 1;
-    while 64 * k < w || 32 * k < h {
-        k *= 2;
-    }
-    let (fw, fh) = (10 * k, 16 * k);
-    if k + fw > w || k + fh > h {
-        return None;
-    }
-    let texels = (k..k + fh)
-        .flat_map(|y| (k..k + fw).map(move |x| (x, y)))
-        .map(|(x, y)| image.get_pixel(x, y).0)
-        .collect();
-    Some((texels, fw as usize, fh as usize))
-}
-
-/// Opens OptiFine's cape editor for `account`: a session join on Mojang's session server at
-/// `session` ([`SESSION`]) with a fresh server id, then the editor's address, which carries the
-/// account's id, name and that server id for OptiFine to check the join with. The token goes to
-/// Mojang only, never to OptiFine.
-pub fn optifine_editor(session: &str, token: &str, account: &Account) -> Result<String, String> {
-    if !optifine_name(&account.name) {
-        return Err("This name can't have an OptiFine cape.".into());
-    }
-    let mut random = [0u8; 20];
-    getrandom::fill(&mut random).map_err(|e| e.to_string())?;
-    let server_id: String = random.iter().map(|b| format!("{b:02x}")).collect();
-    let (status, _) = send(
-        request_to("POST", &format!("{session}/session/minecraft/join")),
-        Some(Body::Json(json!({
-            "accessToken": token,
-            "selectedProfile": account.uuid,
-            "serverId": server_id,
-        }))),
-        "Mojang's session server",
-    )?;
-    match status {
-        200..=299 => Ok(format!(
-            "https://optifine.net/capeChange?u={}&n={}&s={server_id}",
-            account.uuid, account.name
-        )),
-        401 => Err(super::SIGN_IN_AGAIN.into()),
-        // What a join gets when the account may not play online (Xbox privacy settings, a ban).
-        403 => Err("Mojang's session server refused the sign-in: this account may not play \
-                    online (check its Xbox privacy settings)."
-            .into()),
-        _ => Err(format!(
-            "Mojang's session server couldn't confirm the sign-in (error {status}). Try again later."
-        )),
-    }
 }

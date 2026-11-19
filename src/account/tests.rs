@@ -18,6 +18,8 @@ struct Mock {
     no_profile: bool,
     /// What `launcher/login` answers instead of a token (an older service, an outage).
     launcher_login_refused: Option<u16>,
+    /// The last skin sent asked for slim arms.
+    slim: bool,
     /// The cape a PUT or DELETE on `capes/active` left worn; unset: the profile's own (c2).
     worn: Option<Option<String>>,
     /// Every request: method, path and body.
@@ -37,7 +39,8 @@ fn mock_profile(mock: &Mock) -> Value {
     };
     json!({
         "id": UUID, "name": "Notch",
-        "skins": [{"id": "s1", "state": "ACTIVE", "url": "http://textures.minecraft.net/texture/abc", "variant": "SLIM"}],
+        "skins": [{"id": "s1", "state": "ACTIVE", "url": "http://textures.minecraft.net/texture/abc",
+                   "variant": if mock.slim || mock.worn.is_none() { "SLIM" } else { "CLASSIC" }}],
         "capes": [cape("c1", "Migrator"), cape("c2", "Vanilla")],
     })
 }
@@ -162,15 +165,15 @@ fn route(mock: &mut Mock, method: &str, path: &str, auth: &str, body: &str) -> (
             mock.worn = Some(None);
             reply(200, mock_profile(mock))
         }
-        ("POST", "/session/minecraft/join") => {
-            let v: Value = serde_json::from_str(body).unwrap();
-            assert_eq!(v["selectedProfile"], UUID);
-            let id = v["serverId"].as_str().unwrap();
-            assert!(id.len() == 40 && id.bytes().all(|b| b.is_ascii_hexdigit()));
-            if v["accessToken"] == "mc-token" {
-                (204, String::new())
+        ("POST", "/mc/minecraft/profile/skins") => {
+            assert_eq!(auth, "Bearer mc-token");
+            if body.contains("name=\"variant\"\r\n\r\nslim") {
+                mock.slim = true;
+            }
+            if body.contains("\u{FFFD}PNG") {
+                reply(200, mock_profile(mock))
             } else {
-                reply(403, json!({"error": "ForbiddenOperationException"}))
+                reply(400, json!({"errorType": "BAD_REQUEST"}))
             }
         }
         _ => reply(404, json!({"error": "NotFound"})),
@@ -211,7 +214,7 @@ fn serve(mock: Arc<Mutex<Mock>>) -> Endpoints {
             }
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
-            let body = String::from_utf8(body).unwrap();
+            let body = String::from_utf8_lossy(&body).into_owned();
             let (status, text) = {
                 let mut m = mock.lock().unwrap();
                 // A bare `GET /` is a local tool probing every new port (T3 Code does, on the Mac
@@ -2621,27 +2624,6 @@ fn a_token_for_a_cape_change_is_renewed_and_kept_when_it_runs_out() {
         .contains("no longer signed in"));
 }
 
-#[test]
-fn optifines_editor_opens_after_a_session_join() {
-    let (m, ep) = mock(|_| {});
-    let session = ep.minecraft.trim_end_matches("/mc").to_owned();
-    let url = capes::optifine_editor(&session, "mc-token", &notch()).unwrap();
-    let (_, path, body) = m.lock().unwrap().log.last().cloned().unwrap();
-    assert_eq!(path, "/session/minecraft/join");
-    let joined: Value = serde_json::from_str(&body).unwrap();
-    let id = joined["serverId"].as_str().unwrap();
-    assert_eq!(
-        url,
-        format!("https://optifine.net/capeChange?u={UUID}&n=Notch&s={id}")
-    );
-    assert!(capes::optifine_editor(&session, "stale", &notch()).is_err());
-    let odd = Account {
-        name: "no&such=name".into(),
-        ..notch()
-    };
-    assert!(capes::optifine_editor(&session, "mc-token", &odd).is_err());
-}
-
 /// A cape server that answers `capes/<name>.png` from `pictures`, 404 otherwise.
 fn cape_server(pictures: Vec<(&'static str, Vec<u8>)>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2700,24 +2682,28 @@ fn an_optifine_cape_is_found_by_name_and_none_is_none() {
 }
 
 #[test]
-fn a_capes_front_is_cut_from_any_layout() {
-    for (w, h, k) in [
-        (64, 32, 1),
-        (46, 22, 1),
-        (22, 17, 1),
-        (128, 64, 2),
-        (92, 44, 2),
-    ] {
-        let (texels, fw, fh) = capes::front(&png(w, h)).unwrap();
-        assert_eq!((fw, fh), (10 * k, 16 * k), "{w}x{h}");
-        assert_eq!(texels.len(), fw * fh);
-        // The first texel is the face's top left corner, at (k, k).
-        assert_eq!(texels[0], [k as u8, k as u8, 7, 255], "{w}x{h}");
-        assert_eq!(
-            texels[fw * fh - 1],
-            [(k + fw - 1) as u8, (k + fh - 1) as u8, 7, 255]
-        );
-    }
-    assert!(capes::front(&png(8, 8)).is_none());
-    assert!(capes::front(b"not a png").is_none());
+fn a_skin_is_sent_with_its_arm_model_and_only_a_skin_is_sent() {
+    let (m, ep) = mock(|m| m.worn = Some(Some("c2".into())));
+    let worn = skins::upload(&ep, "mc-token", &png(64, 64), true).unwrap();
+    assert_eq!(
+        worn,
+        Some((
+            "http://textures.minecraft.net/texture/abc".into(),
+            "slim".into()
+        ))
+    );
+    let (method, path, body) = m.lock().unwrap().log.last().cloned().unwrap();
+    assert_eq!(
+        (method.as_str(), path.as_str()),
+        ("POST", "/mc/minecraft/profile/skins")
+    );
+    assert!(body.contains("filename=\"skin.png\"\r\nContent-Type: image/png"));
+    // Never sent: a picture that isn't a skin.
+    let before = m.lock().unwrap().log.len();
+    assert!(skins::upload(&ep, "mc-token", &png(46, 22), false).is_err());
+    assert!(skins::upload(&ep, "mc-token", b"not a png", false).is_err());
+    assert_eq!(m.lock().unwrap().log.len(), before);
+    assert!(skins::upload(&offline(), "mc-token", &png(64, 64), false)
+        .unwrap_err()
+        .contains("Could not reach"));
 }

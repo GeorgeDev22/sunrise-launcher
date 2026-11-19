@@ -15,6 +15,7 @@
 //! overrides. Without one, sign-in says it is not configured.
 pub mod capes;
 pub mod session;
+pub mod skins;
 
 use serde_json::{json, Value};
 use std::collections::HashMap;

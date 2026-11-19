@@ -315,31 +315,39 @@ worker thread, cached on disk by texture hash (`assets/skins/xx/hash`, like vani
 `SkinManager`), converted from legacy 64×32 the way `SkinTextureDownloader` does and given to the
 player renderer. Until a skin arrives the default skin for the UUID shows (as today).
 
-## Capes in the launcher (Skins tab)
+## Skins and capes in the launcher (Skins tab)
 
-The Skins tab (`src/skins_page.rs`, requests in `src/account/capes.rs`) shows the capes of the
-account that plays, the selected one or else the first, as the game picks it.
+The Skins tab (`src/skins_page.rs`; requests in `src/account/capes.rs` and `src/account/skins.rs`,
+the 3D preview in `src/player_model.rs`, saved skins in `src/skin_library.rs`) shows the account
+that plays, the selected one or else the first, as the game picks it. Choices show on the preview
+at once and are sent only on Save: the skin first when it or its arms changed, then the cape when
+it changed.
 
+- **Preview**: the player model drawn in software (each part a box on the skin's standard
+  layout, its outer layer grown a little, the cape swung back from the shoulders), turned by
+  dragging. Old 64×32 skins get their left arm and leg, an opaque base layer and the hat cleared
+  when it has no clear texel, as the game's `processLegacySkin` does.
+- **Skin**: `POST /minecraft/profile/skins`, a multipart form with `variant` (`classic` or `slim`)
+  and `file` (the PNG, at most 256 KiB, 64×64 or 64×32). The choices are the skin worn now, saved
+  skins, and the game's nine default skins from the prepared game files
+  (`assets/minecraft/textures/entity/player/{wide,slim}`). A PNG added from a file or dropped on
+  the page is saved under the first 16 hex digits of its SHA-1 in `saved-skins/` (with
+  `index.json` for names and arm models), its arms guessed from its clear arm column.
 - **Owned capes**: `GET /minecraft/profile` lists them, each `ACTIVE` or `INACTIVE`, with its id,
   name (`alias`) and picture. Only pictures under `textures.minecraft.net/texture/` are fetched, as
   the game does. Wearing one is `PUT /minecraft/profile/capes/active` with `{"capeId": …}`, and no
-  cape is `DELETE` on the same path; both answer with the profile, whose capes the page then shows.
-  The worn cape's URL is saved in accounts.json beside the skin. These calls take
-  `account::token_for`'s token: the keychain's Minecraft token when it has an hour left, else one
-  renewed through the refresh token and kept.
+  cape is `DELETE` on the same path. These calls take `account::token_for`'s token: the keychain's
+  Minecraft token when it has an hour left, else one renewed through the refresh token and kept.
 - **OptiFine cape**: `http://s.optifine.net/capes/<name>.png`, by name and over plain HTTP (the
   server has no HTTPS). Only valid Minecraft names (1 to 16 letters, digits and underscores) are
-  ever put in the URL, and only a PNG of at most 256 KiB is accepted; a 404 means no cape. Its
-  picture is laid on the smallest 64·2ⁿ by 32·2ⁿ canvas it fits, as OptiFine does, so the 46×22
-  and older 22×17 pictures keep the 64×32 layout's coordinates.
-- **Edit on OptiFine**: as OptiFine's in-game "Open Cape Editor" does, a session join
-  (`POST https://sessionserver.mojang.com/session/minecraft/join` with the token, the profile id and
-  a random 40-digit hex server id), then `https://optifine.net/capeChange?u=<id>&n=<name>&s=<server id>`
-  in the browser, where OptiFine checks the join. The token goes to Mojang only, never to OptiFine.
-  A 403 from the join means the account may not play online (its Xbox privacy settings).
+  ever put in the URL, and only a PNG of at most 256 KiB is accepted; a 404 (or no answer) means no
+  tile. Its picture is laid on the smallest 64·2ⁿ by 32·2ⁿ canvas it fits, as OptiFine does.
+  Choosing it takes the Minecraft cape off (`DELETE`), so the OptiFine cape is what players with
+  OptiFine see and nothing shows for the others; OptiFine itself is never asked to change anything.
 
-Every request runs on a worker; a listing or a change answers under the number it was asked with,
-so an answer for an account no longer shown, or one a later request replaced, is dropped.
+After a Save the new skin and cape are kept in accounts.json and the account's head is drawn
+again. Every request runs on a worker; one numbered for another account, or replaced by a later
+one, is dropped.
 
 ## Chat signing (part d)
 
