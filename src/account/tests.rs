@@ -18,8 +18,28 @@ struct Mock {
     no_profile: bool,
     /// What `launcher/login` answers instead of a token (an older service, an outage).
     launcher_login_refused: Option<u16>,
+    /// The cape a PUT or DELETE on `capes/active` left worn; unset: the profile's own (c2).
+    worn: Option<Option<String>>,
     /// Every request: method, path and body.
     log: Vec<(String, String, String)>,
+}
+
+/// The mock's profile, its capes worn as `mock.worn` says.
+fn mock_profile(mock: &Mock) -> Value {
+    let worn = mock.worn.clone().unwrap_or(Some("c2".into()));
+    let cape = |id: &str, alias: &str| {
+        let state = if worn.as_deref() == Some(id) {
+            "ACTIVE"
+        } else {
+            "INACTIVE"
+        };
+        json!({"id": id, "state": state, "url": format!("http://textures.minecraft.net/texture/{id}"), "alias": alias})
+    };
+    json!({
+        "id": UUID, "name": "Notch",
+        "skins": [{"id": "s1", "state": "ACTIVE", "url": "http://textures.minecraft.net/texture/abc", "variant": "SLIM"}],
+        "capes": [cape("c1", "Migrator"), cape("c2", "Vanilla")],
+    })
 }
 
 fn reply(status: u16, body: Value) -> (u16, String) {
@@ -125,15 +145,34 @@ fn route(mock: &mut Mock, method: &str, path: &str, auth: &str, body: &str) -> (
             404,
             json!({"path": "/minecraft/profile", "errorType": "NOT_FOUND", "error": "NOT_FOUND"}),
         ),
-        ("GET", "/mc/minecraft/profile") => reply(
-            200,
-            json!({
-                "id": UUID, "name": "Notch",
-                "skins": [{"id": "s1", "state": "ACTIVE", "url": "http://textures.minecraft.net/texture/abc", "variant": "SLIM"}],
-                "capes": [{"id": "c1", "state": "INACTIVE", "url": "http://textures.minecraft.net/texture/cape1", "alias": "Migrator"},
-                          {"id": "c2", "state": "ACTIVE", "url": "http://textures.minecraft.net/texture/cape2", "alias": "Vanilla"}],
-            }),
-        ),
+        ("GET", "/mc/minecraft/profile") => reply(200, mock_profile(mock)),
+        ("PUT", "/mc/minecraft/profile/capes/active") => {
+            assert_eq!(auth, "Bearer mc-token");
+            let v: Value = serde_json::from_str(body).unwrap();
+            match v["capeId"].as_str() {
+                Some(id @ ("c1" | "c2")) => {
+                    mock.worn = Some(Some(id.into()));
+                    reply(200, mock_profile(mock))
+                }
+                _ => reply(400, json!({"errorType": "BAD_REQUEST"})),
+            }
+        }
+        ("DELETE", "/mc/minecraft/profile/capes/active") => {
+            assert_eq!(auth, "Bearer mc-token");
+            mock.worn = Some(None);
+            reply(200, mock_profile(mock))
+        }
+        ("POST", "/session/minecraft/join") => {
+            let v: Value = serde_json::from_str(body).unwrap();
+            assert_eq!(v["selectedProfile"], UUID);
+            let id = v["serverId"].as_str().unwrap();
+            assert!(id.len() == 40 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+            if v["accessToken"] == "mc-token" {
+                (204, String::new())
+            } else {
+                reply(403, json!({"error": "ForbiddenOperationException"}))
+            }
+        }
         _ => reply(404, json!({"error": "NotFound"})),
     }
 }
@@ -227,7 +266,7 @@ fn the_whole_chain() {
                 "http://textures.minecraft.net/texture/abc".into(),
                 "slim".into()
             )),
-            cape: Some("http://textures.minecraft.net/texture/cape2".into()),
+            cape: Some("http://textures.minecraft.net/texture/c2".into()),
         }
     );
     assert_eq!(secrets.minecraft_token, "mc-token");
@@ -2499,4 +2538,186 @@ fn an_earlier_launchers_secret_is_copied_and_the_own_one_wins() {
         get_carried(None, |_| Ok(None), |_| panic!("nothing to copy")),
         Ok(None)
     );
+}
+
+#[test]
+fn the_owned_capes_are_listed_and_one_or_none_is_worn() {
+    let (m, ep) = mock(|_| {});
+    let names = |capes: &[capes::Cape]| -> Vec<(String, bool)> {
+        capes.iter().map(|c| (c.alias.clone(), c.active)).collect()
+    };
+    let listed = capes::list(&ep, "mc-token").unwrap();
+    assert_eq!(
+        names(&listed),
+        [("Migrator".into(), false), ("Vanilla".into(), true)]
+    );
+    assert_eq!(listed[0].url, "http://textures.minecraft.net/texture/c1");
+    let worn = capes::wear(&ep, "mc-token", Some("c1")).unwrap();
+    assert_eq!(
+        names(&worn),
+        [("Migrator".into(), true), ("Vanilla".into(), false)]
+    );
+    let none = capes::wear(&ep, "mc-token", None).unwrap();
+    assert!(none.iter().all(|c| !c.active));
+    assert_eq!(
+        capes::wear(&ep, "mc-token", Some("not-owned")),
+        Err("This account doesn't own that cape.".into())
+    );
+    let log = &m.lock().unwrap().log;
+    assert!(log.iter().any(|(method, path, body)| method == "PUT"
+        && path == "/mc/minecraft/profile/capes/active"
+        && body.contains("\"capeId\":\"c1\"")));
+    assert!(log
+        .iter()
+        .any(|(method, path, _)| method == "DELETE" && path.ends_with("/capes/active")));
+}
+
+#[test]
+fn a_cape_change_with_no_network_says_so() {
+    let refused = capes::wear(&offline(), "mc-token", None).unwrap_err();
+    assert!(refused.contains("Could not reach the Minecraft services"));
+}
+
+#[test]
+fn only_textures_minecraft_net_capes_are_kept() {
+    let profile = json!({"capes": [
+        {"id": "a", "state": "ACTIVE", "url": "http://textures.minecraft.net/texture/abc123", "alias": "A"},
+        {"id": "b", "state": "INACTIVE", "url": "http://example.com/texture/abc123", "alias": "B"},
+        {"id": "c", "state": "INACTIVE", "url": "http://textures.minecraft.net/texture/../x", "alias": "C"},
+        {"state": "INACTIVE", "url": "http://textures.minecraft.net/texture/def", "alias": "No id"},
+    ]});
+    let kept = capes::owned(&profile);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].id, "a");
+    assert!(capes::owned(&json!({})).is_empty());
+}
+
+#[test]
+fn a_token_for_a_cape_change_is_renewed_and_kept_when_it_runs_out() {
+    let (_m, ep) = mock(|_| {});
+    let store = MemoryStore::default();
+    let fresh = secrets("mc-token-kept", true);
+    signed_in(&store, &fresh);
+    assert_eq!(
+        token_for(&ep, Some("test-client"), &store, &notch()).as_deref(),
+        Ok("mc-token-kept"),
+        "a token with time left is used as it is"
+    );
+    let old = Secrets {
+        minecraft_expires_at: now() + 60,
+        ..secrets("mc-token-old", true)
+    };
+    store
+        .set(UUID, &serde_json::to_string(&old).unwrap())
+        .unwrap();
+    assert_eq!(
+        token_for(&ep, Some("test-client"), &store, &notch()).as_deref(),
+        Ok("mc-token")
+    );
+    assert_eq!(kept(&store).minecraft_token, "mc-token");
+    store.delete(UUID).unwrap();
+    assert!(token_for(&ep, Some("test-client"), &store, &notch())
+        .unwrap_err()
+        .contains("no longer signed in"));
+}
+
+#[test]
+fn optifines_editor_opens_after_a_session_join() {
+    let (m, ep) = mock(|_| {});
+    let session = ep.minecraft.trim_end_matches("/mc").to_owned();
+    let url = capes::optifine_editor(&session, "mc-token", &notch()).unwrap();
+    let (_, path, body) = m.lock().unwrap().log.last().cloned().unwrap();
+    assert_eq!(path, "/session/minecraft/join");
+    let joined: Value = serde_json::from_str(&body).unwrap();
+    let id = joined["serverId"].as_str().unwrap();
+    assert_eq!(
+        url,
+        format!("https://optifine.net/capeChange?u={UUID}&n=Notch&s={id}")
+    );
+    assert!(capes::optifine_editor(&session, "stale", &notch()).is_err());
+    let odd = Account {
+        name: "no&such=name".into(),
+        ..notch()
+    };
+    assert!(capes::optifine_editor(&session, "mc-token", &odd).is_err());
+}
+
+/// A cape server that answers `capes/<name>.png` from `pictures`, 404 otherwise.
+fn cape_server(pictures: Vec<(&'static str, Vec<u8>)>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+            }
+            let path = line.split_whitespace().nth(1).unwrap_or("").to_owned();
+            let found = pictures
+                .iter()
+                .find(|(name, _)| path == format!("/capes/{name}.png"));
+            let (status, body) = found.map_or((404, &b"Not found"[..]), |(_, b)| (200, b));
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(body);
+        }
+    });
+    base
+}
+
+/// A `w` by `h` PNG, each texel coloured by its place.
+fn png(w: u32, h: u32) -> Vec<u8> {
+    let image = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba([x as u8, y as u8, 7, 255]));
+    let mut out = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+#[test]
+fn an_optifine_cape_is_found_by_name_and_none_is_none() {
+    let base = cape_server(vec![
+        ("Notch", png(46, 22)),
+        ("Broken", b"<html>not a picture</html>".to_vec()),
+    ]);
+    let cape = capes::optifine(&base, "Notch").unwrap().unwrap();
+    assert_eq!(cape, png(46, 22));
+    assert_eq!(capes::optifine(&base, "Nobody"), Ok(None));
+    assert!(capes::optifine(&base, "Broken").is_err());
+    // Never a request for a name no Minecraft account can have.
+    assert_eq!(capes::optifine(&base, "../etc/passwd"), Ok(None));
+    assert!(capes::optifine("http://127.0.0.1:9", "Notch")
+        .unwrap_err()
+        .contains("Could not reach"));
+}
+
+#[test]
+fn a_capes_front_is_cut_from_any_layout() {
+    for (w, h, k) in [
+        (64, 32, 1),
+        (46, 22, 1),
+        (22, 17, 1),
+        (128, 64, 2),
+        (92, 44, 2),
+    ] {
+        let (texels, fw, fh) = capes::front(&png(w, h)).unwrap();
+        assert_eq!((fw, fh), (10 * k, 16 * k), "{w}x{h}");
+        assert_eq!(texels.len(), fw * fh);
+        // The first texel is the face's top left corner, at (k, k).
+        assert_eq!(texels[0], [k as u8, k as u8, 7, 255], "{w}x{h}");
+        assert_eq!(
+            texels[fw * fh - 1],
+            [(k + fw - 1) as u8, (k + fh - 1) as u8, 7, 255]
+        );
+    }
+    assert!(capes::front(&png(8, 8)).is_none());
+    assert!(capes::front(b"not a png").is_none());
 }
