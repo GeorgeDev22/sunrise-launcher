@@ -13,7 +13,6 @@
 use super::*;
 use crate::frame::Reach as _;
 use crate::paint::palette;
-use crate::widgets::Kind;
 use gpui::{img, rgb, ExternalPaths, MouseButton, MouseDownEvent, MouseMoveEvent, RenderImage};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -787,27 +786,23 @@ impl Launcher {
             .flex()
             .gap(px(8.))
             .child(
-                crate::widgets::button(
-                    "skins-save",
-                    if saving { "Saving…" } else { "Save" },
-                    Kind::Primary,
-                    &self.theme,
-                )
-                .flex_1()
-                .when(!changed || saving, |d| d.opacity(0.5).cursor_default())
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.look_save();
-                    cx.notify();
-                })),
+                crate::frame::primary("skins-save", tr(if saving { "Saving…" } else { "Save" }))
+                    .flex_1()
+                    .when(!changed || saving, |d| d.opacity(0.5).cursor_default())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.look_save();
+                        cx.notify();
+                    })),
             )
             .when(changed && !saving, |d| {
                 d.child(
-                    crate::widgets::button("skins-undo", "Undo", Kind::Secondary, &self.theme)
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    crate::frame::button("skins-undo", tr("Undo")).on_click(cx.listener(
+                        |this, _: &ClickEvent, _, cx| {
                             this.skins.chosen = None;
                             this.skins.said = None;
                             cx.notify();
-                        })),
+                        },
+                    )),
                 )
             });
         crate::home::card()
