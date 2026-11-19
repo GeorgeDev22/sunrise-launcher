@@ -929,15 +929,14 @@ impl Launcher {
             })
     }
 
-    /// One choice: a picture and a name, the chosen one edged in the accent and the worn one
-    /// saying so.
+    /// One choice: a picture and its name (none for an empty one), the chosen one edged in the
+    /// accent. A row's tiles stretch to its tallest, so a two-line name keeps them lined up.
     fn tile(
         &self,
         id: SharedString,
         picture: AnyElement,
         label: SharedString,
         chosen: bool,
-        worn: bool,
     ) -> Stateful<Div> {
         let p = palette();
         div()
@@ -966,26 +965,19 @@ impl Launcher {
                     .justify_center()
                     .child(picture),
             )
-            .child(
-                div()
-                    .w_full()
-                    .text_center()
-                    .text_size(px(tokens::SMALL))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    // Two lines at most, and always room for two, so the tiles line up.
-                    .h(px(34.))
-                    .line_height(px(17.))
-                    .overflow_hidden()
-                    .line_clamp(2)
-                    .child(label),
-            )
-            .child(
-                div()
-                    .h(px(14.))
-                    .text_size(px(tokens::CAPTION))
-                    .text_color(rgb(p.accent_ink))
-                    .when(worn, |d| d.child(tr("Wearing"))),
-            )
+            .when(!label.is_empty(), |d| {
+                d.child(
+                    div()
+                        .w_full()
+                        .text_center()
+                        .text_size(px(tokens::SMALL))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .line_height(px(17.))
+                        .overflow_hidden()
+                        .line_clamp(2)
+                        .child(label),
+                )
+            })
     }
 
     /// A small picture of the model in `skin`, for its tile.
@@ -1051,7 +1043,6 @@ impl Launcher {
                     self.skin_thumb(account, &SkinPick::Worn, worn_slim),
                     tr("Your skin").into(),
                     look.skin == SkinPick::Worn,
-                    true,
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     pick(this, SkinPick::Worn, Some(worn_slim));
@@ -1095,7 +1086,6 @@ impl Launcher {
                     self.skin_thumb(account, &skin, slim),
                     saved.name.clone().into(),
                     look.skin == skin,
-                    is_worn,
                 )
                 // The worn skin can't be forgotten: it would be kept again at once.
                 .when(!is_worn, |d| d.child(forget))
@@ -1111,7 +1101,8 @@ impl Launcher {
                 .id("skin-add")
                 .reach_edge()
                 .w(px(TILE_W))
-                .h(px(PICTURE_H + 60.))
+                // As tall as a tile's picture, or its row's tallest tile.
+                .min_h(px(PICTURE_H + 20.))
                 .flex()
                 .flex_col()
                 .items_center()
@@ -1159,7 +1150,6 @@ impl Launcher {
                         self.skin_thumb(account, &skin, look.slim),
                         title.into(),
                         look.skin == skin,
-                        false,
                     )
                     .on_click(cx.listener(
                         move |this, _: &ClickEvent, _, cx| {
@@ -1182,7 +1172,6 @@ impl Launcher {
         look: &Look,
         cx: &mut Context<Self>,
     ) -> Div {
-        let worn = self.worn_look(account).cape;
         let section = div().flex().flex_col().gap(px(12.)).child(Self::section(
             "Cape",
             "The capes your account owns. Everyone sees the one you wear, in every launcher and on every server.",
@@ -1264,9 +1253,8 @@ impl Launcher {
                 CapePick::Minecraft(id) => format!("cape-{id}"),
                 CapePick::Optifine => "cape-optifine".to_string(),
             });
-            let (chosen, is_worn) = (look.cape == cape, worn == cape);
             tiles = tiles.child(
-                self.tile(id, picture, label.into(), chosen, is_worn)
+                self.tile(id, picture, label.into(), look.cape == cape)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         let cape = cape.clone();
                         this.choose(|look| look.cape = cape);
