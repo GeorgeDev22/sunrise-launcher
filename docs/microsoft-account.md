@@ -315,6 +315,32 @@ worker thread, cached on disk by texture hash (`assets/skins/xx/hash`, like vani
 `SkinManager`), converted from legacy 64×32 the way `SkinTextureDownloader` does and given to the
 player renderer. Until a skin arrives the default skin for the UUID shows (as today).
 
+## Capes in the launcher (Skins tab)
+
+The Skins tab (`src/skins_page.rs`, requests in `src/account/capes.rs`) shows the capes of the
+account that plays, the selected one or else the first, as the game picks it.
+
+- **Owned capes**: `GET /minecraft/profile` lists them, each `ACTIVE` or `INACTIVE`, with its id,
+  name (`alias`) and picture. Only pictures under `textures.minecraft.net/texture/` are fetched, as
+  the game does. Wearing one is `PUT /minecraft/profile/capes/active` with `{"capeId": …}`, and no
+  cape is `DELETE` on the same path; both answer with the profile, whose capes the page then shows.
+  The worn cape's URL is saved in accounts.json beside the skin. These calls take
+  `account::token_for`'s token: the keychain's Minecraft token when it has an hour left, else one
+  renewed through the refresh token and kept.
+- **OptiFine cape**: `http://s.optifine.net/capes/<name>.png`, by name and over plain HTTP (the
+  server has no HTTPS). Only valid Minecraft names (1 to 16 letters, digits and underscores) are
+  ever put in the URL, and only a PNG of at most 256 KiB is accepted; a 404 means no cape. Its
+  picture is laid on the smallest 64·2ⁿ by 32·2ⁿ canvas it fits, as OptiFine does, so the 46×22
+  and older 22×17 pictures keep the 64×32 layout's coordinates.
+- **Edit on OptiFine**: as OptiFine's in-game "Open Cape Editor" does, a session join
+  (`POST https://sessionserver.mojang.com/session/minecraft/join` with the token, the profile id and
+  a random 40-digit hex server id), then `https://optifine.net/capeChange?u=<id>&n=<name>&s=<server id>`
+  in the browser, where OptiFine checks the join. The token goes to Mojang only, never to OptiFine.
+  A 403 from the join means the account may not play online (its Xbox privacy settings).
+
+Every request runs on a worker; a listing or a change answers under the number it was asked with,
+so an answer for an account no longer shown, or one a later request replaced, is dropped.
+
 ## Chat signing (part d)
 
 26.3's dedicated servers default to `enforce-secure-profile=true`. A client without a chat session

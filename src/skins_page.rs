@@ -194,9 +194,18 @@ impl Launcher {
         let Some(Ok(list)) = &self.skins.capes else {
             return;
         };
+        // The cape worn now goes into accounts.json too: every page switch reads that file again.
         let worn = list.iter().find(|c| c.active).map(|c| c.url.clone());
         if let Some(a) = self.accounts.accounts.iter_mut().find(|a| a.uuid == uuid) {
-            a.cape = worn;
+            if a.cape != worn {
+                a.cape = worn;
+                let accounts = self.accounts.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = accounts.save_renewed() {
+                        eprintln!("Sunrise: the cape worn now couldn't be saved: {e}");
+                    }
+                });
+            }
         }
         for url in self.skins.unasked(list) {
             self.skins.pictures.insert(url.clone(), None);
@@ -254,6 +263,10 @@ impl Launcher {
     }
 
     pub(crate) fn skins_page(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+        // Another account plays now (switched in the account menu while the page is open).
+        if self.cape_account().map(|a| a.uuid) != self.skins.uuid {
+            self.skins_open();
+        }
         let page = div()
             .id("skins-page")
             .flex_1()

@@ -62,6 +62,11 @@ The opening, then Play ([clip](docs/opening.webm)):
   built on your fork's Actions, or the zip holding it) and installs it as `imported-<date>-<sha>`:
   a copy of the selected release or Nightly's folder, game files included, with that program as the
   game. Imported builds are listed apart as unsigned, and no update replaces them.
+- **Skins**: for now, the capes of the account that plays. The capes the Minecraft account owns,
+  each shown by its front, and No cape: a click wears it for everyone, in every launcher and on
+  every server. Below them, the player's OptiFine cape (looked up by name on OptiFine's cape
+  server) with **Edit on OptiFine**, which opens OptiFine's own cape editor signed in through a
+  Mojang session join. Also reached from the account menu (**Skins and capes**) and Ctrl+K.
 - **Move data to another drive**: Settings → Data folder → Move… copies the launcher's
   installations, downloads and account files, the game's worlds and instances, and managed native
   build data to an empty folder. Close games and servers and wait for active jobs first. The launcher
