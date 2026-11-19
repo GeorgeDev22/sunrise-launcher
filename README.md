@@ -68,7 +68,7 @@ The opening, then Play ([clip](docs/opening.webm)):
   Minecraft account owns, or the player's OptiFine cape when OptiFine has one under their name).
   Every skin worn is kept in the list, so one replaced stays there to wear again.
   Choices show on the preview at once; **Save** sends them to the Minecraft services, so every
-  launcher and server shows them. Saved skins stay in `saved-skins/` in the data folder. Also
+  launcher and server shows them. Saved skins stay in `saved-skins/<account>/` in the data folder, each account's apart. Also
   reached from the account menu (**Skins and capes**) and Ctrl+K.
 - **Move data to another drive**: Settings → Data folder → Move… copies the launcher's
   installations, downloads and account files, the game's worlds and instances, and managed native

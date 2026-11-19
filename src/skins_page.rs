@@ -212,7 +212,7 @@ impl Launcher {
         if self.skins.uuid.as_deref() != Some(&account.uuid) {
             self.skins = skins_page::Skins::new_for(&account.uuid);
         }
-        self.skins.saved = skin_library::list(&skin_library::folder());
+        self.skins.saved = skin_library::list(&skin_library::folder(&account.uuid));
         if !matches!(self.skins.capes, Some(Ok(_))) {
             self.capes_ask(&account);
         }
@@ -337,7 +337,7 @@ impl Launcher {
         let Some(Some(png)) = self.skins.pictures.get(url) else {
             return;
         };
-        let dir = skin_library::folder();
+        let dir = skin_library::folder(&account.uuid);
         let day = chrono::Local::now().format("%b %-d").to_string();
         let name = trf("Skin from {date}", &[("date", &day)]);
         match skin_library::add(&dir, png, &name, Some(model == "slim")) {
@@ -407,9 +407,10 @@ impl Launcher {
             },
             SkinPick::Saved(id) => {
                 let key = format!("saved:{id}");
-                let png = self.skins.file(&key, || {
-                    Some(skin_library::folder().join(format!("{id}.png")))
-                });
+                let dir = skin_library::folder(&account.uuid);
+                let png = self
+                    .skins
+                    .file(&key, || Some(dir.join(format!("{id}.png"))));
                 (key, png)
             }
             SkinPick::Default(name) => {
@@ -566,7 +567,10 @@ impl Launcher {
 
     /// Adds skin files (chosen or dropped) to the saved skins and chooses the last one.
     fn skins_add(&mut self, paths: Vec<std::path::PathBuf>) {
-        let dir = skin_library::folder();
+        let Some(uuid) = self.skins.uuid.clone() else {
+            return;
+        };
+        let dir = skin_library::folder(&uuid);
         for path in paths {
             let name = path
                 .file_stem()
@@ -614,7 +618,10 @@ impl Launcher {
     }
 
     fn skin_forget(&mut self, id: &str) {
-        let dir = skin_library::folder();
+        let Some(uuid) = self.skins.uuid.clone() else {
+            return;
+        };
+        let dir = skin_library::folder(&uuid);
         if let Err(why) = skin_library::remove(&dir, id) {
             self.skins.said = Some(Err(why));
             return;
@@ -832,8 +839,11 @@ impl Launcher {
                         ..
                     }) = &this.skins.chosen
                     {
-                        let _ = skin_library::set_slim(&skin_library::folder(), id, slim);
-                        this.skins.saved = skin_library::list(&skin_library::folder());
+                        if let Some(uuid) = this.skins.uuid.clone() {
+                            let dir = skin_library::folder(&uuid);
+                            let _ = skin_library::set_slim(&dir, id, slim);
+                            this.skins.saved = skin_library::list(&dir);
+                        }
                     }
                     cx.notify();
                 }))
@@ -876,15 +886,30 @@ impl Launcher {
                     .text_center()
                     .child(crate::settings::hint(tr("Drag to turn"))),
             )
+            // The arms the skin is drawn for: wide (4 pixels, like Steve) or slim (3, like Alex),
+            // named as the official launcher names them.
             .child(
                 div()
                     .flex()
-                    .gap(px(4.))
-                    .p(px(3.))
-                    .rounded(crate::tokens::r(crate::tokens::R_CONTROL))
-                    .bg(rgb(p.field))
-                    .child(arms(false, "Classic arms"))
-                    .child(arms(true, "Slim arms")),
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(tokens::SMALL))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(rgb(p.muted))
+                            .child(tr("Player model")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(4.))
+                            .p(px(3.))
+                            .rounded(crate::tokens::r(crate::tokens::R_CONTROL))
+                            .bg(rgb(p.field))
+                            .child(arms(false, "Wide"))
+                            .child(arms(true, "Slim")),
+                    ),
             )
             .child(actions)
             .when_some(self.skins.said.clone(), |d, said| {

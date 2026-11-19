@@ -1,6 +1,6 @@
-//! Saved skins: the skins a player added to the Skins tab, kept in the launcher's data folder
-//! (`saved-skins/`: each skin's PNG under its id, and `index.json` with their names and arm
-//! models) so they can be worn again with one click. They leave the computer only when worn,
+//! Saved skins: the skins an account wore or its player added on the Skins tab, kept in the
+//! launcher's data folder, each account's apart (`saved-skins/<uuid>/`: each skin's PNG under its
+//! id, and `index.json` with their names and arm models) so they can be worn again with one click. They leave the computer only when worn,
 //! and then only to the Minecraft services.
 use std::path::{Path, PathBuf};
 
@@ -13,9 +13,16 @@ pub struct Saved {
     pub slim: bool,
 }
 
-/// The folder saved skins are kept in.
-pub fn folder() -> PathBuf {
-    crate::backend::data_dir().join("saved-skins")
+/// The folder the account `uuid` keeps its saved skins in: another account never sees them.
+pub fn folder(uuid: &str) -> PathBuf {
+    folder_in(&crate::backend::data_dir(), uuid)
+}
+
+fn folder_in(data: &Path, uuid: &str) -> PathBuf {
+    // Only a profile UUID (32 hex digits) names a folder; anything else gets none of them.
+    let valid = uuid.len() == 32 && uuid.bytes().all(|b| b.is_ascii_hexdigit());
+    data.join("saved-skins")
+        .join(if valid { uuid } else { "no-account" })
 }
 
 /// The saved skins in `dir`, oldest first; those whose picture is gone are left out.
@@ -203,5 +210,21 @@ mod tests {
         assert_eq!(add(dir.path(), &copy, "Again", None).unwrap(), worn);
         assert_eq!(list(dir.path()).len(), 1);
         assert!(find(dir.path(), &picture(64, 64, false)).is_none());
+    }
+
+    #[test]
+    fn each_account_keeps_its_own_skins() {
+        let data = tempfile::tempdir().unwrap();
+        let (a, b) = (
+            folder_in(data.path(), "069a79f444e94726a5befca90e38aaf5"),
+            folder_in(data.path(), "b09600dff4354d4fb56776eec1e55083"),
+        );
+        add(&a, &picture(64, 64, false), "Mine", None).unwrap();
+        assert_eq!(list(&a).len(), 1);
+        assert!(list(&b).is_empty(), "another account sees none of them");
+        assert_eq!(
+            folder_in(data.path(), "../../x"),
+            data.path().join("saved-skins").join("no-account")
+        );
     }
 }

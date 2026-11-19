@@ -334,7 +334,7 @@ it changed.
   and `file` (the PNG, at most 256 KiB, 64×64 or 64×32). The choices are the skin worn now, saved
   skins, and the game's nine default skins from the prepared game files
   (`assets/minecraft/textures/entity/player/{wide,slim}`). A PNG added from a file or dropped on
-  the page is saved in `saved-skins/` (with `index.json` for names and arm models), its arms
+  the page is saved in `saved-skins/<account uuid>/`, each account's apart (with `index.json` for names and arm models), its arms
   guessed from its clear arm column. A skin's id is the first 16 hex digits of the SHA-1 of its
   texels (clear ones alike), not of its file, since the texture server sends a worn skin back in
   another PNG. The skin worn is kept there too ("Skin from <day>", with the arms it is worn
