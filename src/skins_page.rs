@@ -5,7 +5,8 @@
 //! once; Save sends them to the Minecraft services, which every client and server then shows.
 //!
 //! Choosing the OptiFine cape takes the Minecraft cape off: the OptiFine cape is the one players
-//! with OptiFine (or Sunrise) see, and no Minecraft cape shows for the others.
+//! with OptiFine see (and Sunrise players, once a cape mod shows it: sunrise-org/sunrise#3589), and
+//! no Minecraft cape shows for the others.
 //!
 //! Every request runs on a worker and comes back as a message (`Msg::Capes`, `Picture`,
 //! `OptifineCape`, `LookSaved`); one numbered for another account or replaced by a later
