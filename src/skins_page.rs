@@ -195,6 +195,23 @@ fn default_skin_path(resources: &std::path::Path, name: &str, slim: bool) -> std
 }
 
 impl Launcher {
+    /// The prepared game files the default skins are read from: the version the selected profile
+    /// plays when it has them, else the first installed version that does. A Nightly just
+    /// downloaded has none until it is prepared, and the page would lose its default skins.
+    fn skin_resources(&self) -> std::path::PathBuf {
+        let has =
+            |resources: &std::path::Path| default_skin_path(resources, "steve", false).is_file();
+        let played = self.game_resources();
+        if has(&played) {
+            return played;
+        }
+        self.installed
+            .iter()
+            .map(|tag| backend::resources(tag))
+            .find(|resources| has(resources))
+            .unwrap_or(played)
+    }
+
     /// The account whose look the page shows: the one that plays (the selected one, else the
     /// first), as the game picks it.
     fn look_account(&self) -> Option<account::Account> {
@@ -291,7 +308,7 @@ impl Launcher {
         let slim = match &account.skin {
             Some((_, model)) => model == "slim",
             None => {
-                sunrise_launcher::heads::default_skin_file(&self.game_resources(), &account.uuid)
+                sunrise_launcher::heads::default_skin_file(&self.skin_resources(), &account.uuid)
                     .is_some_and(|(_, slim)| slim)
             }
         };
@@ -394,7 +411,7 @@ impl Launcher {
                     self.skins.pictures.get(url).cloned().flatten().map(Rc::new),
                 ),
                 None => {
-                    let resources = self.game_resources();
+                    let resources = self.skin_resources();
                     let key = format!("uuid-default:{}", account.uuid);
                     let png = self.skins.file(&key, || {
                         sunrise_launcher::heads::default_skin_file(&resources, &account.uuid)
@@ -413,7 +430,7 @@ impl Launcher {
             }
             SkinPick::Default(name) => {
                 let key = format!("default:{name}:{slim}");
-                let resources = self.game_resources();
+                let resources = self.skin_resources();
                 let png = self
                     .skins
                     .file(&key, || Some(default_skin_path(&resources, name, slim)));
@@ -1125,7 +1142,7 @@ impl Launcher {
                     this.skins_pick_file(cx);
                 })),
         );
-        let resources = self.game_resources();
+        let resources = self.skin_resources();
         let defaults: Vec<&'static str> = DEFAULT_SKINS
             .into_iter()
             .filter(|name| default_skin_path(&resources, name, false).is_file())
